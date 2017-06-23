@@ -1,47 +1,44 @@
-# Extended APIs Hook Example
+# TLB splitting module for the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor)
 
 ## Description
 
-Using EPT to hook a function call is a common use case for reverse engineering,
-introspection, and offensive / defensive research. This repository provides a
-simple example of how this can be done using the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), 
-and the [Extended APIs](https://github.com/Bareflank/extended_apis) repo using EPT / VPID. 
-For further information about the Bareflank Hypervisor and how to create extensions, please see the following
-documentation.
+This module adds TLB splitting to the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor) by providing
+an IOCTL and VMCALL interface. This module also makes use of the [Extended APIs](https://github.com/Bareflank/extended_apis) module.
+For further information about the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor) and how to create extensions,
+please see the following documentation.
 
 [API Documentation](http://bareflank.github.io/hypervisor/html/)
 
 ## Compilation / Usage
 
-This example uses both the Bareflank Hypervisor, as well as the Extended APIs
-repo. To keep things simple, we will use an in-tree build for this example.
-Note that the Extended APIs build on their own, but to get our example to
-build in-tree, we need to prepend "src_" to the folder name so that Bareflank
-knows to compile it as well.
+This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), as well as the [Extended APIs](https://github.com/Bareflank/extended_apis) module.
+The instructions below are for Windows and should be executed from inside Cygwin64.
 
 ```
 cd ~/
 git clone https://github.com/Bareflank/hypervisor.git
-cd ~/hypervisor
+cd hypervisor
 git clone https://github.com/Bareflank/extended_apis.git
-git clone https://github.com/Bareflank/extended_apis_example_hook.git src_extended_apis_example_hook
+git clone https://github.com/Randshot/tlb-split.git src_tlb_split
 
-./tools/scripts/setup-<xxx>.sh --no-configure
-sudo reboot
+./tools/scripts/setup_cygwin.sh --no-configure
 
-~/hypervisor/configure -m src_extended_apis_example_hook/bin/hook.modules
+cd ..
+mkdir build
+cd build
+
+../hypervisor/configure -m ../hypervisor/src_tlb_split/bin/tlb_split.modules --compiler clang --linker $HOME/usr/bin/x86_64-elf-ld.exe
 make
 ```
 
 To run this example, we need to first load the hypervisor, and then run the
-example app that will get hooked by the hypervisor. Note that this app has to
-perform a vmcall, so it will need root privileges.
+example app that will get hooked by the hypervisor.
 
 ```
 make driver_load
 make quick
 
-sudo ./makefiles/src_extended_apis_example_hook/app/bin/native/hook
+makefiles/src_tlb_split/app/bin/native/hook.exe
 
 make stop
 make driver_unload
