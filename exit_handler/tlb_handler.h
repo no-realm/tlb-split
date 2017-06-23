@@ -1,8 +1,7 @@
-#ifndef EXIT_HANDLER_HOOK_H
-#define EXIT_HANDLER_HOOK_H
+#ifndef _H
+#define _H
 
 #include <memory_manager/map_ptr_x64.h>
-
 #include <vmcs/root_ept_intel_x64.h>
 #include <vmcs/ept_entry_intel_x64.h>
 #include <vmcs/vmcs_intel_x64_eapis.h>
@@ -12,7 +11,6 @@
 #include <vmcs/vmcs_intel_x64_64bit_read_only_data_fields.h>
 #include <vmcs/vmcs_intel_x64_natural_width_guest_state_fields.h>
 #include <vmcs/vmcs_intel_x64_natural_width_read_only_data_fields.h>
-
 #include <exit_handler/exit_handler_intel_x64_eapis.h>
 
 #include <algorithm>
@@ -51,18 +49,18 @@ const std::string log_file{ R"(C:\flip_log.txt)" };
 
 #define CONTEXT(d_pa) g_splits[d_pa]
 
-class exit_handler_hook : public exit_handler_intel_x64_eapis
+class tlb_handler : public exit_handler_intel_x64_eapis
 {
 public:
 
     /// Default Constructor
     ///
-    exit_handler_hook()
+    tlb_handler()
     { }
 
     /// Destructor
     ///
-    ~exit_handler_hook() override
+    ~tlb_handler() override
     { }
 
     /// Handle Exit
