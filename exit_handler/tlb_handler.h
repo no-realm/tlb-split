@@ -1,5 +1,5 @@
-#ifndef _H
-#define _H
+#ifndef TLB_HANDLER_H
+#define TLB_HANDLER_H
 
 #include <memory_manager/map_ptr_x64.h>
 #include <vmcs/root_ept_intel_x64.h>
@@ -44,8 +44,6 @@ extern std::unique_ptr<root_ept_intel_x64> g_root_ept;
 std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>> g_splits;
 std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>          g_2m_pages;
 static std::mutex g_mutex;
-
-const std::string log_file{ R"(C:\flip_log.txt)" };
 
 #define CONTEXT(d_pa) g_splits[d_pa]
 
