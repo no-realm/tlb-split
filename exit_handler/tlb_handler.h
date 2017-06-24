@@ -18,6 +18,7 @@
 #include <vector>
 #include <map>
 #include <mutex>
+#include <tuple>
 
 using namespace intel_x64;
 
@@ -27,22 +28,54 @@ using int_t = uintptr_t;
 /// Context structure for TLB splits
 ///
 struct split_context {
-    std::unique_ptr<uint8_t[]> c_page = nullptr;
+    std::unique_ptr<uint8_t[]> c_page = nullptr; // This is the owner of the code page memory.
 
-    int_t c_va = 0;
-    int_t c_pa = 0;
+    int_t c_va = 0; // This is the (host) virtual address of the code page.
+    int_t c_pa = 0; // This is the (host) physical of the code page.
 
-    int_t d_va = 0;
+    int_t d_va = 0; // This is the (guest) virtual address of the data page.
+    int_t d_pa = 0; // This is the (guest) physical address of the data page.
+
+    int_t gva = 0;          // The (guest) physical address this split was requested for. (Only first request.)
+    size_t num_hooks = 0;   // This holds the number of hooks for this split context.
+    uint64_t cr3 = 0;       // This is the cr3 value of the process which requested the split.
+    bool active = false;    // This defines whether this split is active.
+};
+
+struct flip_data {
+    int_t rip = 0;
+    int_t gva = 0;
+    int_t orig_gva = 0;
+    int_t gpa = 0;
     int_t d_pa = 0;
+    int_t cr3 = 0;
+    int_t flags = 0;
 
-    size_t num_hooks = 0;
-    uint64_t cr3 = 0;
-    bool active = false;
+    flip_data() = default;
+    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _flags)
+    {
+        rip = _rip;
+        gva = _gva;
+        orig_gva = _orig_gva;
+        gpa = _gpa;
+        d_pa = _d_pa;
+        cr3 = _cr3;
+        flags = _flags;
+    }
+
+    ~flip_data() = default;
+};
+
+enum access_t {
+    read = 0x001,
+    write = 0x010,
+    exec = 0x100,
 };
 
 extern std::unique_ptr<root_ept_intel_x64> g_root_ept;
 std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>> g_splits;
 std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>          g_2m_pages;
+std::vector<flip_data> g_flip_log;
 static std::mutex g_mutex;
 
 #define CONTEXT(d_pa) g_splits[d_pa]
@@ -80,26 +113,29 @@ public:
             auto &&gpa = vmcs::guest_physical_address::get();
             auto &&d_pa = gpa & mask;
 
+            // Get violation access flags.
+            int_t flags = 0x000
+                | (vmcs::exit_qualification::ept_violation::data_read::is_enabled()         ? access_t::read    : 0x000)
+                | (vmcs::exit_qualification::ept_violation::data_write::is_enabled()        ? access_t::write   : 0x000)
+                | (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? access_t::exec    : 0x000)
+                ;
+
             // Search for relevant entry in <map> m_splits.
             auto &&split_it = g_splits.find(d_pa);
             if (split_it == g_splits.end())
             {
-
                 // Unexpected EPT violation for this page.
                 // Check if it is a WRITE violation. If that's
                 // the case, it likely is a different process,
                 // so try to reset the access flags to pass-through.
                 // (I don't get why they wouldn't be in the first place.)
-                if (vmcs::exit_qualification::ept_violation::data_write::is_enabled())
+                if (access_t::write == (flags & access_t::write))
                 {
                     bfinfo << bfcolor_warning << "WRITE " << bfcolor_end << ": gva: " << view_as_pointer(gva)
                       << " gpa: " << view_as_pointer(gpa)
                       << " d_pa: " << view_as_pointer(d_pa)
                       << " cr3: " << view_as_pointer(cr3)
-                      << " flags: "
-                      << (vmcs::exit_qualification::ept_violation::data_read::is_enabled() ? "R" : "-")
-                      << (vmcs::exit_qualification::ept_violation::data_write::is_enabled() ? "W" : "-")
-                      << (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? "X" : "-")
+                      << " flags: " << view_as_pointer(flags)
                       << bfendl;
 
                     auto &&entry = g_root_ept->gpa_to_epte(gpa);
@@ -111,10 +147,7 @@ public:
                       << " gpa: " << view_as_pointer(gpa)
                       << " d_pa: " << view_as_pointer(d_pa)
                       << " cr3: " << view_as_pointer(cr3)
-                      << " flags: "
-                      << (vmcs::exit_qualification::ept_violation::data_read::is_enabled() ? "R" : "-")
-                      << (vmcs::exit_qualification::ept_violation::data_write::is_enabled() ? "W" : "-")
-                      << (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? "X" : "-")
+                      << " flags: " << view_as_pointer(flags)
                       << bfendl;
                 }
             }
@@ -124,37 +157,25 @@ public:
                 std::lock_guard<std::mutex> guard(g_mutex);
 
                 // Check exit qualifications
-                if (vmcs::exit_qualification::ept_violation::data_write::is_enabled())
+                if (access_t::write == (flags & access_t::write))
                 {
                     // WRITE violation. Deactivate split and flip to data page.
                     //
-                    bfinfo << bfcolor_warning << "WRITE " << bfcolor_end << ": gva: " << view_as_pointer(gva)
-                      << " gpa: " << view_as_pointer(gpa)
-                      << " d_pa: " << view_as_pointer(d_pa)
-                      << " cr3: " << view_as_pointer(cr3)
-                      << " flags: "
-                      << (vmcs::exit_qualification::ept_violation::data_read::is_enabled() ? "R" : "-")
-                      << (vmcs::exit_qualification::ept_violation::data_write::is_enabled() ? "W" : "-")
-                      << (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? "X" : "-")
-                      << bfendl;
+
+                    // Add violation data to the flip log.
+                    g_flip_log.emplace_back(m_state_save->rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags);
 
                     deactivate_split(gva);
                 }
-                else if (vmcs::exit_qualification::ept_violation::data_read::is_enabled())
+                else if (access_t::read == (flags & access_t::read))
                 {
                     // READ violation. Flip to data page.
                     //
-                    bfinfo << bfcolor_func << "READ " << bfcolor_end << ": gva: " << view_as_pointer(gva)
-                      << " gpa: " << view_as_pointer(gpa)
-                      << " d_pa: " << view_as_pointer(d_pa)
-                      << " cr3: " << view_as_pointer(cr3)
-                      << " flags: "
-                      << (vmcs::exit_qualification::ept_violation::data_read::is_enabled() ? "R" : "-")
-                      << (vmcs::exit_qualification::ept_violation::data_write::is_enabled() ? "W" : "-")
-                      << (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? "X" : "-")
-                      << bfendl;
 
-                    if (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled())
+                    // Add violation data to the flip log.
+                    g_flip_log.emplace_back(m_state_save->rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags);
+
+                    if (access_t::exec == (flags & access_t::exec))
                     {
                         bferror << "handle_exit: READ|EXEC violation. Not handled for now. gpa: " << view_as_pointer(d_pa) << bfendl;
                     }
@@ -164,19 +185,10 @@ public:
                     entry.set_phys_addr(split_it->second->d_pa);
                     entry.set_read_access(true);
                 }
-                else if(vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled())
+                else if(access_t::exec == (flags & access_t::exec))
                 {
                     // EXEC violation. Flip to code page.
                     //
-                    bfinfo << bfcolor_func << "EXEC " << bfcolor_end << ": gva: " << view_as_pointer(gva)
-                      << " gpa: " << view_as_pointer(gpa)
-                      << " d_pa: " << view_as_pointer(d_pa)
-                      << " cr3: " << view_as_pointer(cr3)
-                      << " flags: "
-                      << (vmcs::exit_qualification::ept_violation::data_read::is_enabled() ? "R" : "-")
-                      << (vmcs::exit_qualification::ept_violation::data_write::is_enabled() ? "W" : "-")
-                      << (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? "X" : "-")
-                      << bfendl;
 
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
@@ -185,14 +197,14 @@ public:
                 }
                 else
                 {
+                    // Add violation data to the flip log.
+                    g_flip_log.emplace_back(m_state_save->rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags);
+
                     bfinfo << bfcolor_error << "UNX_Q" << bfcolor_end << ": gva: " << view_as_pointer(gva)
                       << " gpa: " << view_as_pointer(gpa)
                       << " d_pa: " << view_as_pointer(d_pa)
                       << " cr3: " << view_as_pointer(cr3)
-                      << " flags: "
-                      << (vmcs::exit_qualification::ept_violation::data_read::is_enabled() ? "R" : "-")
-                      << (vmcs::exit_qualification::ept_violation::data_write::is_enabled() ? "W" : "-")
-                      << (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? "X" : "-")
+                      << " flags: " << view_as_pointer(flags)
                       << bfendl;
                 }
             }
@@ -221,6 +233,8 @@ public:
         /// 4 = deactivate_all_splits()
         /// 5 = is_split(int_t gva)
         /// 6 = write_to_c_page(int_t from_va, int_t to_va, size_t size)
+        /// 7 = get_flip_num()
+        /// 8 = get_flip_data(int_t out_addr, int_t out_size)
         ///
         /// <r03+> for args
         ///
@@ -249,10 +263,14 @@ public:
             case 6: // write_to_c_page(int_t from_va, int_t to_va, size_t size)
                 regs.r02 = static_cast<uintptr_t>(write_to_c_page(regs.r03, regs.r04, regs.r05));
                 break;
+            case 7: // get_flip_num()
+                regs.r02 = g_flip_log.size();
+                break;
+            case 8: // get_flip_data(int_t out_addr, int_t out_size)
+                regs.r02 = static_cast<uintptr_t>(get_flip_data(regs.r03, regs.r04));
             default:
                 regs.r02 = -1u;
                 break;
-
         }
     }
 
@@ -281,12 +299,7 @@ private:
     int
     create_split_context(int_t gva)
     {
-        // Sanity check for gva.
-        if (gva == 0)
-        {
-            bfwarning << "create_split_context: gva has to be != 0" << bfendl;
-            return 0;
-        }
+        expects(gva != 0);
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -328,6 +341,7 @@ private:
 
             // Create and assign unqiue split_context.
             CONTEXT(d_pa) = std::make_unique<split_context>();
+            CONTEXT(d_pa)->gva = gva;
             CONTEXT(d_pa)->cr3 = cr3;
             CONTEXT(d_pa)->d_pa = d_pa;
             CONTEXT(d_pa)->d_va = d_va;
@@ -370,12 +384,7 @@ private:
     int
     activate_split(int_t gva)
     {
-        // Sanity check for gva.
-        if (gva == 0)
-        {
-            bfwarning << "activate_split: gva has to be != 0" << bfendl;
-            return 0;
-        }
+        expects(gva != 0);
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -401,12 +410,12 @@ private:
 
             std::lock_guard<std::mutex> guard(g_mutex);
 
-            // We set a trap here, so that the correct page gets
-            // set on next violation.
+            // We assign the code page here, since that's the most
+            // likely one to get used next.
             auto &&entry = g_root_ept->gpa_to_epte(d_pa);
             entry.trap_on_access();
-            //entry.set_phys_addr(split_it->second->d_pa);
-            //entry.set_read_access(true);
+            entry.set_phys_addr(split_it->second->c_pa);
+            entry.set_execute_access(true);
 
             // Invalidate/Flush TLB
             vmx::invvpid_all_contexts();
@@ -432,12 +441,7 @@ private:
     int
     deactivate_split(int_t gva)
     {
-        // Sanity check for gva.
-        if (gva == 0)
-        {
-            bfwarning << "deactivate_split: gva has to be != 0" << bfendl;
-            return 0;
-        }
+        expects(gva != 0);
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -558,12 +562,7 @@ private:
     int
     is_split(int_t gva)
     {
-        // Sanity check for gva.
-        if (gva == 0)
-        {
-            bfwarning << "is_split: gva has to be != 0" << bfendl;
-            return 0;
-        }
+        expects(gva != 0);
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -594,12 +593,9 @@ private:
     int
     write_to_c_page(int_t from_va, int_t to_va, size_t size)
     {
-        // Sanity check for from_va | to_va | size.
-        if (from_va == 0 || to_va == 0 || size == 0)
-        {
-            bfwarning << "write_to_c_page: sanity check failure" << bfendl;
-            return 0;
-        }
+        expects(from_va != 0);
+        expects(to_va != 0);
+        expects(size >= 1);
 
         // Logging params
         bfdebug << "write_to_c_page: from_va: " << view_as_pointer(from_va) << ", to_va: " << view_as_pointer(to_va)<< ", size: " << view_as_pointer(size) << bfendl;
@@ -677,6 +673,28 @@ private:
             bfwarning << "write_to_c_page: no split found for: " << view_as_pointer(d_pa) << bfendl;
 
         return 0;
+    }
+
+    /// Writes the flip data to the passed <out_addr>.
+    ///
+    /// @expects out_addr != 0
+    /// @expects out_size != 0
+    ///
+    /// @return 1
+    ///
+    int
+    get_flip_data(int_t out_addr, int_t out_size)
+    {
+        expects(out_addr != 0);
+        expects(out_size != 0);
+
+        // Map the required memory.
+        auto &&omap = bfn::make_unique_map_x64<char>(out_addr, vmcs::guest_cr3::get(), out_size, vmcs::guest_ia32_pat::get());
+
+        // Copy the flip data to the mapped memory region.
+        std::memmove(omap.get(), g_flip_log.data(), out_size);
+
+        return 1;
     }
 };
 

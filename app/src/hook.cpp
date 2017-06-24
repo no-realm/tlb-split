@@ -2,8 +2,43 @@
 #include <guard_exceptions.h>
 
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <cstring>
+#include <vector>
+#include <string>
+#include <limits.h>
 
+using int_t = uintptr_t;
+using ptr_t = void*;
+
+struct flip_data {
+    int_t rip = 0;
+    int_t gva = 0;
+    int_t orig_gva = 0;
+    int_t gpa = 0;
+    int_t d_pa = 0;
+    int_t cr3 = 0;
+    int_t flags = 0;
+
+    flip_data() = default;
+    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _flags)
+    {
+        rip = _rip;
+        gva = _gva;
+        orig_gva = _orig_gva;
+        gpa = _gpa;
+        d_pa = _d_pa;
+        cr3 = _cr3;
+        flags = _flags;
+    }
+
+    ~flip_data() = default;
+};
+
+std::vector<flip_data> g_flip_log;
+
+/*
 void
 hello_world()
 { std::cout << "hello world" << std::endl << std::endl; }
@@ -11,6 +46,38 @@ hello_world()
 void
 hooked_hello_world()
 { std::cout << "hooked hello world" << std::endl << std::endl; }
+
+ptr_t
+view_as_pointer(int_t addr)
+{ return reinterpret_cast<ptr_t>(addr); }
+*/
+
+namespace detail {
+    constexpr int HEX_DIGIT_BITS = 4;
+    constexpr int HEX_BASE_CHARS = 2; // Optional.  See footnote #2.
+
+    // Replaced CharCheck with a much simpler trait.
+    template<typename T> struct is_char
+      : std::integral_constant<bool,
+        std::is_same<T, char>::value ||
+        std::is_same<T, signed char>::value ||
+        std::is_same<T, unsigned char>::value> {};
+}
+
+template<typename T>
+std::string hex_out_s(T val, int width = (sizeof(T) * CHAR_BIT / detail::HEX_DIGIT_BITS)) {
+    using namespace detail;
+
+    std::stringstream sformatter;
+    sformatter << std::hex
+               << std::internal
+               << std::showbase
+               << std::setfill('0')
+               << std::setw(width + HEX_BASE_CHARS)
+               << (is_char<T>::value ? static_cast<unsigned int>(val) : val);
+
+    return sformatter.str();
+}
 
 int
 main(int argc, const char *argv[])
@@ -38,6 +105,8 @@ main(int argc, const char *argv[])
         /// 4 = deactivate_all_splits()
         /// 5 = is_split(int_t gva)
         /// 6 = write_to_c_page(int_t from_va, int_t to_va, size_t size)
+        /// 7 = get_flip_num()
+        /// 8 = get_flip_data(int_t out_addr, int_t out_size)
         ///
         /// <r03+> for args
         ///
@@ -49,6 +118,7 @@ main(int argc, const char *argv[])
         ctl.call_ioctl_vmcall(&regs, 0);
         std::cout << "hv_present: " << (regs.r02 == 1 ? "yes" : "no") << std::endl;
 
+        /*
         // VMCALL: Check if page is split.
         regs.r00 = VMCALL_REGISTERS;
         regs.r01 = VMCALL_MAGIC_NUMBER;
@@ -111,6 +181,48 @@ main(int argc, const char *argv[])
 
         std::cout << "after deactivate_split: ";
         hello_world();
+        */
+
+        // VMCALL: Get data num.
+        regs.r00 = VMCALL_REGISTERS;
+        regs.r01 = VMCALL_MAGIC_NUMBER;
+        regs.r02 = 7;
+        ctl.call_ioctl_vmcall(&regs, 0);
+        auto data_num = regs.r02;
+
+        if (data_num == 0)
+        {
+            std::cout << "no flip data" << std::endl;
+            exit(0);
+        }
+        else
+            std::cout << "# of registered flips: " << data_num << std::endl;
+
+        // Reserve enough space.
+        std::vector<flip_data> local_flip_log;
+        local_flip_log.resize(data_num);
+
+        // VMCALL: Get latest flip data.
+        regs.r00 = VMCALL_REGISTERS;
+        regs.r01 = VMCALL_MAGIC_NUMBER;
+        regs.r02 = 8;
+        regs.r03 = reinterpret_cast<int_t>(local_flip_log.data());
+        regs.r04 = data_num * sizeof(flip_data);
+        ctl.call_ioctl_vmcall(&regs, 0);
+
+        for (const auto & flip : local_flip_log)
+        {
+            std::cout << "!FLIP:"
+              << " rip: " << hex_out_s(flip.rip)
+              << " gva: " << hex_out_s(flip.gva)
+              << " orig_gva: " << hex_out_s(flip.orig_gva)
+              << " gpa: " << hex_out_s(flip.gpa)
+              << " d_pa: " << hex_out_s(flip.d_pa)
+              << " cr3: " << hex_out_s(flip.cr3)
+              << " flags: " << hex_out_s(flip.flags, 3)
+              << std::endl;
+        }
+
     });
 
     return 0;
