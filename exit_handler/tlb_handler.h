@@ -22,7 +22,6 @@
 #include <vector>
 #include <map>
 #include <mutex>
-#include <tuple>
 
 using namespace intel_x64;
 
@@ -114,7 +113,8 @@ std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>          g_2m_pages;
 std::vector<flip_data> g_flip_log;
 static std::mutex g_mutex;
 
-#define CONTEXT(d_pa) g_splits[d_pa]
+#define CONTEXT(_d_pa) g_splits[_d_pa]
+#define IT(_split_it) _split_it->second
 
 class tlb_handler : public exit_handler_intel_x64_eapis
 {
@@ -183,34 +183,33 @@ public:
                 // Check exit qualifications
                 if (access_t::write == (flags & access_t::write))
                 {
-                    // WRITE violation. Deactivate split and flip to data page.
-                    //
+                    // Check for known RIPs.
+                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
+                    {
+                        return (m.rip == rip && m.flags == flags);
+                    });
+                    if (flip_it != g_flip_log.end())
+                    {
+                        // Increase counter
+                        std::lock_guard<std::mutex> guard(g_mutex);
+                        flip_it->counter++;
+                    }
+                    else
+                    {
+                        // Add violation data to the flip log.
+                        std::lock_guard<std::mutex> guard(g_mutex);
+                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
+                    }
 
                     if (split_it->second->cr3 != cr3)
                     {
+                        // WRITE violation. Deactivate split and flip to data page.
+                        //
                         bfwarning << "handle_exit: deactivating page because of write violation from different cr3: " << hex_out_s(cr3, 8) << bfendl;
                         deactivate_split(gva);
                     }
                     else
                     {
-                        // Check for known RIPs.
-                        auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
-                        {
-                            return (m.rip == rip && m.flags == flags);
-                        });
-                        if (flip_it != g_flip_log.end())
-                        {
-                            // Increase counter
-                            std::lock_guard<std::mutex> guard(g_mutex);
-                            flip_it->counter++;
-                        }
-                        else
-                        {
-                            // Add violation data to the flip log.
-                            std::lock_guard<std::mutex> guard(g_mutex);
-                            g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
-                        }
-
                         // Switch to data page.
                         std::lock_guard<std::mutex> guard(g_mutex);
                         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
@@ -268,6 +267,9 @@ public:
                 }
                 else
                 {
+                    // This shouldn't even be possible...
+                    //
+
                     // Check for known RIPs.
                     auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
                     {
@@ -467,8 +469,8 @@ private:
             // This page already got split. Just increase the hook counter.
             bfdebug << "create_split_context: page already split for: " << hex_out_s(d_pa) << bfendl;
             std::lock_guard<std::mutex> guard(g_mutex);
-            CONTEXT(d_pa)->num_hooks++;
-            bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
+            IT(split_it)->num_hooks++;
+            bfdebug << "create_split_context: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
         }
 
         return 1;
@@ -497,7 +499,7 @@ private:
         auto &&split_it = g_splits.find(d_pa);
         if (split_it != g_splits.end())
         {
-            if (split_it->second->active == true)
+            if (IT(split_it)->active == true)
             {
                 // This split is already active, so don't do anything.
                 //
@@ -513,7 +515,7 @@ private:
             // likely one to get used next.
             std::lock_guard<std::mutex> guard(g_mutex);
             auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-            entry.set_phys_addr(split_it->second->c_pa);
+            entry.set_phys_addr(IT(split_it)->c_pa);
             entry.trap_on_access();
             entry.set_execute_access(true);
 
@@ -521,7 +523,7 @@ private:
             vmx::invvpid_all_contexts();
             vmx::invept_global();
 
-            split_it->second->active = true;
+            IT(split_it)->active = true;
             return 1;
         }
         else
@@ -553,28 +555,28 @@ private:
         auto &&split_it = g_splits.find(d_pa);
         if (split_it != g_splits.end())
         {
-            if (split_it->second->num_hooks > 1)
+            if (IT(split_it)->num_hooks > 1)
             {
                 // We still have other hooks on this page,
                 // so don't deactive the split yet.
                 // Also decrease the hook counter.
                 bfdebug << "deactivate_split: other hooks found on this page: " << hex_out_s(d_pa) << bfendl;
-                bfdebug << "deactivate_split: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
+                bfdebug << "deactivate_split: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
 
                 std::lock_guard<std::mutex> guard(g_mutex);
-                split_it->second->num_hooks--;
+                IT(split_it)->num_hooks--;
                 return 1;
             }
 
             // We have found the relevant split context.
             //
             bfwarning << "deactivate_split: deactivating split for: " << hex_out_s(d_pa) << bfendl;
-            bfdebug << "deactivate_split: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
+            bfdebug << "deactivate_split: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
 
             // Flip to data page and restore to default flags
             std::lock_guard<std::mutex> guard(g_mutex);
             auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-            entry.set_phys_addr(split_it->second->d_pa);
+            entry.set_phys_addr(IT(split_it)->d_pa);
             entry.pass_through_access();
 
             // Invalidate/Flush TLB
@@ -591,14 +593,14 @@ private:
             {
                 // We found an adjacent split.
                 // Check if the hook counter is 0.
-                if (next_split_it->second->num_hooks == 0)
+                if (IT(next_split_it)->num_hooks == 0)
                 {
                     // This is likely a page which got split when writing
                     // to a code page while exceding the page bounds.
                     // Since this split isn't needed anymore, deactivate
                     // it too.
-                    bfdebug << "deactivate_split: deactivating adjacent split for: " << hex_out_s(next_split_it->second->d_pa) << bfendl;
-                    deactivate_split(next_split_it->second->d_va);
+                    bfdebug << "deactivate_split: deactivating adjacent split for: " << hex_out_s(IT(next_split_it)->d_pa) << bfendl;
+                    deactivate_split(IT(next_split_it)->d_va);
                 }
             }
 
@@ -678,7 +680,7 @@ private:
             // Check for match in <map> m_splits.
             auto &&split_it = g_splits.find(d_pa);
             if (split_it != g_splits.end())
-                return split_it->second->active ? 1 : 0;
+                return IT(split_it)->active ? 1 : 0;
         }
         catch (std::exception&)
         {
@@ -733,7 +735,7 @@ private:
                 bfdebug << "write_to_c_page: we are writing to two pages: " << hex_out_s(d_pa) << " & " << hex_out_s(end_pa) << bfendl;
 
                 // Check if the second page is already split
-                if (!is_split(end_va))
+                if (is_split(end_va) == 0)
                 {
                     // We have to split this page before writing to it.
                     //
@@ -761,10 +763,10 @@ private:
                 auto &&vmm_data = bfn::make_unique_map_x64<uint8_t>(from_va, cr3, size, vmcs::guest_ia32_pat::get());
 
                 // Write to first page.
-                std::memmove(reinterpret_cast<ptr_t>(CONTEXT(d_pa)->c_va + write_offset), reinterpret_cast<ptr_t>(vmm_data.get()), bytes_1st_page);
+                std::memmove(reinterpret_cast<ptr_t>(IT(split_it)->c_va + write_offset), reinterpret_cast<ptr_t>(vmm_data.get()), bytes_1st_page);
 
                 // Write to second page.
-                std::memmove(reinterpret_cast<ptr_t>(CONTEXT(end_pa)->c_va), reinterpret_cast<ptr_t>(vmm_data.get() + bytes_1st_page + 1), bytes_2nd_page);
+                std::memmove(reinterpret_cast<ptr_t>(IT(split_it)->c_va), reinterpret_cast<ptr_t>(vmm_data.get() + bytes_1st_page + 1), bytes_2nd_page);
             }
             else
             {
@@ -779,7 +781,7 @@ private:
                 auto &&vmm_data = bfn::make_unique_map_x64<uint8_t>(from_va, cr3, size, vmcs::guest_ia32_pat::get());
 
                 // Copy contents of <from_va> (VMM copy) to <to_va> memory.
-                std::memmove(reinterpret_cast<ptr_t>(CONTEXT(d_pa)->c_va + write_offset), reinterpret_cast<ptr_t>(vmm_data.get()), size);
+                std::memmove(reinterpret_cast<ptr_t>(IT(split_it)->c_va + write_offset), reinterpret_cast<ptr_t>(vmm_data.get()), size);
             }
 
             return 1;
