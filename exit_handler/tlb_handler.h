@@ -13,8 +13,12 @@
 #include <vmcs/vmcs_intel_x64_natural_width_read_only_data_fields.h>
 #include <exit_handler/exit_handler_intel_x64_eapis.h>
 
+#include <limits.h>
 #include <algorithm>
+#include <string>
 #include <cstring>
+#include <sstream>
+#include <iomanip>
 #include <vector>
 #include <map>
 #include <mutex>
@@ -24,6 +28,36 @@ using namespace intel_x64;
 
 using ptr_t = void*;
 using int_t = uintptr_t;
+
+namespace detail
+{
+    constexpr int HEX_DIGIT_BITS = 4;
+    constexpr int HEX_BASE_CHARS = 2; // Optional.  See footnote #2.
+
+    // Replaced CharCheck with a much simpler trait.
+    template<typename T> struct is_char
+      : std::integral_constant<bool,
+        std::is_same<T, char>::value ||
+        std::is_same<T, signed char>::value ||
+        std::is_same<T, unsigned char>::value> {};
+}
+
+template<typename T>
+std::string hex_out_s(T val, int width = (sizeof(T) * CHAR_BIT / detail::HEX_DIGIT_BITS))
+{
+    using namespace detail;
+
+    std::stringstream ss;
+    ss << std::hex
+        << std::internal
+        << std::showbase
+        << std::setfill('0')
+        << std::setw(width + HEX_BASE_CHARS)
+        << (is_char<T>::value ? static_cast<unsigned int>(val) : val)
+        ;
+
+    return ss.str();
+}
 
 /// Context structure for TLB splits
 ///
@@ -130,11 +164,11 @@ public:
                 // Try to reset the access flags to pass-through.
                 // (I don't get why they wouldn't be in the first place.)
 
-                bfinfo << bfcolor_error << "UNX_V" << bfcolor_end << ": gva: " << view_as_pointer(gva)
-                  << " gpa: " << view_as_pointer(gpa)
-                  << " d_pa: " << view_as_pointer(d_pa)
-                  << " cr3: " << view_as_pointer(cr3)
-                  << " flags: " << view_as_pointer(flags)
+                bfinfo << bfcolor_error << "UNX_V" << bfcolor_end << ": gva: " << hex_out_s(gva)
+                  << " gpa: " << hex_out_s(gpa)
+                  << " d_pa: " << hex_out_s(d_pa)
+                  << " cr3: " << hex_out_s(cr3, 8)
+                  << " flags: " << hex_out_s(flags, 3)
                   << bfendl;
 
                 std::lock_guard<std::mutex> guard(g_mutex);
@@ -154,7 +188,7 @@ public:
 
                     if (split_it->second->cr3 != cr3)
                     {
-                        bfwarning << "handle_exit: deactivating page because of write violation from different cr3" << bfendl;
+                        bfwarning << "handle_exit: deactivating page because of write violation from different cr3: " << hex_out_s(cr3, 8) << bfendl;
                         deactivate_split(gva);
                     }
                     else
@@ -211,7 +245,7 @@ public:
 
                     if (access_t::exec == (flags & access_t::exec))
                     {
-                        bferror << "handle_exit: READ|EXEC violation. Not handled for now. gpa: " << view_as_pointer(d_pa) << bfendl;
+                        bferror << "handle_exit: READ|EXEC violation. Not handled for now. gpa: " << hex_out_s(d_pa) << bfendl;
                     }
 
                     std::lock_guard<std::mutex> guard(g_mutex);
@@ -252,11 +286,11 @@ public:
                         g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
                     }
 
-                    bfinfo << bfcolor_error << "UNX_Q" << bfcolor_end << ": gva: " << view_as_pointer(gva)
-                      << " gpa: " << view_as_pointer(gpa)
-                      << " d_pa: " << view_as_pointer(d_pa)
-                      << " cr3: " << view_as_pointer(cr3)
-                      << " flags: " << view_as_pointer(flags)
+                    bfinfo << bfcolor_error << "UNX_Q" << bfcolor_end << ": gva: " << hex_out_s(gva)
+                      << " gpa: " << hex_out_s(gpa)
+                      << " d_pa: " << hex_out_s(d_pa)
+                      << " cr3: " << hex_out_s(cr3, 8)
+                      << " flags: " << hex_out_s(flags, 3)
                       << bfendl;
                 }
             }
@@ -378,7 +412,7 @@ private:
         {
             // This (2m) page range has to be remapped to 4k.
             //
-            bfdebug << "create_split_context: remapping page from 2m to 4k for: " << view_as_pointer(aligned_2m_pa) << bfendl;
+            bfdebug << "create_split_context: remapping page from 2m to 4k for: " << hex_out_s(aligned_2m_pa) << bfendl;
 
             std::lock_guard<std::mutex> guard(g_mutex);
             auto &&saddr = aligned_2m_pa;
@@ -392,7 +426,7 @@ private:
             vmx::invept_global();
         }
         else
-            bfdebug << "create_split_context: page already remapped: " << view_as_pointer(aligned_2m_pa) << bfendl;
+            bfdebug << "create_split_context: page already remapped: " << hex_out_s(aligned_2m_pa) << bfendl;
 
         // Check if we have already split the relevant **4k** page.
         auto &&split_it = g_splits.find(d_pa);
@@ -400,7 +434,7 @@ private:
         {
             // We haven't split this page yet, so do it now.
             //
-            bfdebug << "create_split_context: splitting page for: " << view_as_pointer(d_pa) << bfendl;
+            bfdebug << "create_split_context: splitting page for: " << hex_out_s(d_pa) << bfendl;
 
             // Create and assign unqiue split_context.
             std::lock_guard<std::mutex> guard(g_mutex);
@@ -431,7 +465,7 @@ private:
         else
         {
             // This page already got split. Just increase the hook counter.
-            bfdebug << "create_split_context: page already split for: " << view_as_pointer(d_pa) << bfendl;
+            bfdebug << "create_split_context: page already split for: " << hex_out_s(d_pa) << bfendl;
             std::lock_guard<std::mutex> guard(g_mutex);
             CONTEXT(d_pa)->num_hooks++;
             bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
@@ -467,13 +501,13 @@ private:
             {
                 // This split is already active, so don't do anything.
                 //
-                bfdebug << "activate_split: split already active for: " << view_as_pointer(d_pa) << bfendl;
+                bfdebug << "activate_split: split already active for: " << hex_out_s(d_pa) << bfendl;
                 return 1;
             }
 
             // We have found the relevant split context.
             //
-            bfdebug << "activate_split: activating split for: " << view_as_pointer(d_pa) << bfendl;
+            bfdebug << "activate_split: activating split for: " << hex_out_s(d_pa) << bfendl;
 
             // We assign the code page here, since that's the most
             // likely one to get used next.
@@ -491,7 +525,7 @@ private:
             return 1;
         }
         else
-            bfwarning << "activate_split: no split found for: " << view_as_pointer(d_pa) << bfendl;
+            bfwarning << "activate_split: no split found for: " << hex_out_s(d_pa) << bfendl;
 
         return 0;
     }
@@ -524,7 +558,7 @@ private:
                 // We still have other hooks on this page,
                 // so don't deactive the split yet.
                 // Also decrease the hook counter.
-                bfdebug << "deactivate_split: other hooks found on this page: " << view_as_pointer(d_pa) << bfendl;
+                bfdebug << "deactivate_split: other hooks found on this page: " << hex_out_s(d_pa) << bfendl;
                 bfdebug << "deactivate_split: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
 
                 std::lock_guard<std::mutex> guard(g_mutex);
@@ -534,7 +568,7 @@ private:
 
             // We have found the relevant split context.
             //
-            bfwarning << "deactivate_split: deactivating split for: " << view_as_pointer(d_pa) << bfendl;
+            bfwarning << "deactivate_split: deactivating split for: " << hex_out_s(d_pa) << bfendl;
             bfdebug << "deactivate_split: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
 
             // Flip to data page and restore to default flags
@@ -563,7 +597,7 @@ private:
                     // to a code page while exceding the page bounds.
                     // Since this split isn't needed anymore, deactivate
                     // it too.
-                    bfdebug << "deactivate_split: deactivating adjacent split for: " << view_as_pointer(next_split_it->second->d_pa) << bfendl;
+                    bfdebug << "deactivate_split: deactivating adjacent split for: " << hex_out_s(next_split_it->second->d_pa) << bfendl;
                     deactivate_split(next_split_it->second->d_va);
                 }
             }
@@ -579,7 +613,7 @@ private:
             {
                 // We need to remap the relevant 4k pages to a 2m page.
                 //
-                bfdebug << "deactivate_split: remapping pages from 4k to 2m for: " << view_as_pointer(aligned_2m_pa) << bfendl;
+                bfdebug << "deactivate_split: remapping pages from 4k to 2m for: " << hex_out_s(aligned_2m_pa) << bfendl;
 
                 auto &&saddr = aligned_2m_pa;
                 auto &&eaddr = aligned_2m_pa + ept::pd::size_bytes;
@@ -599,7 +633,7 @@ private:
             return 1;
         }
         else
-            bfwarning << "deactivate_split: no split found for: " << view_as_pointer(d_pa) << bfendl;
+            bfwarning << "deactivate_split: no split found for: " << hex_out_s(d_pa) << bfendl;
 
         return 0;
     }
@@ -613,7 +647,7 @@ private:
 
         for (const auto & split : g_splits)
         {
-            bfdebug << "deactivate_all_splits: deactivating split for: " << view_as_pointer(split.second->d_pa) << bfendl;
+            bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(split.second->d_pa) << bfendl;
             deactivate_split(split.second->d_va);
         }
 
@@ -675,7 +709,7 @@ private:
         expects(size >= 1);
 
         // Logging params
-        bfdebug << "write_to_c_page: from_va: " << view_as_pointer(from_va) << ", to_va: " << view_as_pointer(to_va)<< ", size: " << view_as_pointer(size) << bfendl;
+        bfdebug << "write_to_c_page: from_va: " << hex_out_s(from_va) << ", to_va: " << hex_out_s(to_va)<< ", size: " << hex_out_s(size) << bfendl;
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -696,14 +730,14 @@ private:
                 auto &&end_va = end_range & mask_4k;
                 auto &&end_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
-                bfdebug << "write_to_c_page: we are writing to two pages: " << view_as_pointer(d_pa) << " & " << view_as_pointer(end_pa) << bfendl;
+                bfdebug << "write_to_c_page: we are writing to two pages: " << hex_out_s(d_pa) << " & " << hex_out_s(end_pa) << bfendl;
 
                 // Check if the second page is already split
                 if (!is_split(end_va))
                 {
                     // We have to split this page before writing to it.
                     //
-                    bfdebug << "write_to_c_page: splitting second page: " << view_as_pointer(end_pa) << bfendl;
+                    bfdebug << "write_to_c_page: splitting second page: " << hex_out_s(end_pa) << bfendl;
 
                     create_split_context(end_va);
                     activate_split(end_va);
@@ -734,7 +768,7 @@ private:
             }
             else
             {
-                bfdebug << "write_to_c_page: we are writing to one page: " << view_as_pointer(d_pa) << bfendl;
+                bfdebug << "write_to_c_page: we are writing to one page: " << hex_out_s(d_pa) << bfendl;
 
                 // Get write offset
                 auto &&write_offset = to_va - d_va;
@@ -751,7 +785,7 @@ private:
             return 1;
         }
         else
-            bfwarning << "write_to_c_page: no split found for: " << view_as_pointer(d_pa) << bfendl;
+            bfwarning << "write_to_c_page: no split found for: " << hex_out_s(d_pa) << bfendl;
 
         return 0;
     }
