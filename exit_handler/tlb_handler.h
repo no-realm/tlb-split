@@ -650,7 +650,7 @@ private:
         for (const auto & split : g_splits)
         {
             bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(split.second->d_pa) << bfendl;
-            deactivate_split(split.second->d_va);
+            deactivate_split(split.second->gva);
         }
 
         return 1;
