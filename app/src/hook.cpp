@@ -99,13 +99,6 @@ transl(T addr, const int_t base)
 int
 main(int argc, const char *argv[])
 {
-    int_t module_base = ida_base;
-    if (argc == 2)
-    {
-        module_base = std::stoull(argv[1], 0, 16);
-        std::cout << "Module Base: " << hex_out_s(module_base) << std::endl;
-    }
-
     vmcall_registers_t regs;
 
     guard_exceptions([&]
@@ -128,9 +121,32 @@ main(int argc, const char *argv[])
         /// 6 = write_to_c_page(int_t from_va, int_t to_va, size_t size)
         /// 7 = get_flip_num()
         /// 8 = get_flip_data(int_t out_addr, int_t out_size)
+        /// 9 = clear_flip_data()
         ///
         /// <r03+> for args
         ///
+
+        int_t module_base = ida_base;
+        if (argc == 2)
+        {
+            std::string argstr{ argv[1] };
+
+            if (argstr == "--clear" || argstr == "-c")
+            {
+                // VMCALL: Clear flip data log.
+                regs.r00 = VMCALL_REGISTERS;
+                regs.r01 = VMCALL_MAGIC_NUMBER;
+                regs.r02 = 9;
+                ctl.call_ioctl_vmcall(&regs, 0);
+                std::cout << "flip data cleared" << std::endl;
+                exit(0);
+            }
+            else
+            {
+                module_base = std::stoull(argv[1], 0, 16);
+                std::cout << "Module Base: " << hex_out_s(module_base) << std::endl;
+            }
+        }
 
         // VMCALL: Check if an hv is present.
         regs.r00 = VMCALL_REGISTERS;

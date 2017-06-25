@@ -127,32 +127,19 @@ public:
             if (split_it == g_splits.end())
             {
                 // Unexpected EPT violation for this page.
-                // Check if it is a WRITE violation. If that's
-                // the case, it likely is a different process,
-                // so try to reset the access flags to pass-through.
+                // Try to reset the access flags to pass-through.
                 // (I don't get why they wouldn't be in the first place.)
-                if (access_t::write == (flags & access_t::write))
-                {
-                    bfinfo << bfcolor_warning << "WRITE " << bfcolor_end << ": gva: " << view_as_pointer(gva)
-                      << " gpa: " << view_as_pointer(gpa)
-                      << " d_pa: " << view_as_pointer(d_pa)
-                      << " cr3: " << view_as_pointer(cr3)
-                      << " flags: " << view_as_pointer(flags)
-                      << bfendl;
 
-                    std::lock_guard<std::mutex> guard(g_mutex);
-                    auto &&entry = g_root_ept->gpa_to_epte(gpa);
-                    entry.pass_through_access();
-                }
-                else
-                {
-                    bfinfo << bfcolor_error << "UNX_V" << bfcolor_end << ": gva: " << view_as_pointer(gva)
-                      << " gpa: " << view_as_pointer(gpa)
-                      << " d_pa: " << view_as_pointer(d_pa)
-                      << " cr3: " << view_as_pointer(cr3)
-                      << " flags: " << view_as_pointer(flags)
-                      << bfendl;
-                }
+                bfinfo << bfcolor_error << "UNX_V" << bfcolor_end << ": gva: " << view_as_pointer(gva)
+                  << " gpa: " << view_as_pointer(gpa)
+                  << " d_pa: " << view_as_pointer(d_pa)
+                  << " cr3: " << view_as_pointer(cr3)
+                  << " flags: " << view_as_pointer(flags)
+                  << bfendl;
+
+                std::lock_guard<std::mutex> guard(g_mutex);
+                auto &&entry = g_root_ept->gpa_to_epte(gpa);
+                entry.pass_through_access();
             }
             else
             {
@@ -165,25 +152,39 @@ public:
                     // WRITE violation. Deactivate split and flip to data page.
                     //
 
-                    // Check for known RIPs.
-                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip](const flip_data & m) -> bool
+                    if (split_it->second->cr3 != cr3)
                     {
-                        return m.rip == rip;
-                    });
-                    if (flip_it != g_flip_log.end())
-                    {
-                        // Increase counter
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        flip_it->counter++;
+                        bfwarning << "handle_exit: deactivating page because of write violation from different cr3" << bfendl;
+                        deactivate_split(gva);
                     }
                     else
                     {
-                        // Add violation data to the flip log.
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
-                    }
+                        // Check for known RIPs.
+                        auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
+                        {
+                            return (m.rip == rip && m.flags == flags);
+                        });
+                        if (flip_it != g_flip_log.end())
+                        {
+                            // Increase counter
+                            std::lock_guard<std::mutex> guard(g_mutex);
+                            flip_it->counter++;
+                        }
+                        else
+                        {
+                            // Add violation data to the flip log.
+                            std::lock_guard<std::mutex> guard(g_mutex);
+                            g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
+                        }
 
-                    deactivate_split(gva);
+                        // Switch to data page.
+                        std::lock_guard<std::mutex> guard(g_mutex);
+                        auto &&entry = g_root_ept->gpa_to_epte(d_pa);
+                        entry.trap_on_access();
+                        entry.set_phys_addr(split_it->second->d_pa);
+                        entry.set_read_access(true);
+                        entry.set_write_access(true);
+                    }
                 }
                 else if (access_t::read == (flags & access_t::read))
                 {
@@ -191,9 +192,9 @@ public:
                     //
 
                     // Check for known RIPs.
-                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip](const flip_data & m) -> bool
+                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
                     {
-                        return m.rip == rip;
+                        return (m.rip == rip && m.flags == flags);
                     });
                     if (flip_it != g_flip_log.end())
                     {
@@ -218,6 +219,7 @@ public:
                     entry.trap_on_access();
                     entry.set_phys_addr(split_it->second->d_pa);
                     entry.set_read_access(true);
+                    entry.set_write_access(true);
                 }
                 else if(access_t::exec == (flags & access_t::exec))
                 {
@@ -233,9 +235,9 @@ public:
                 else
                 {
                     // Check for known RIPs.
-                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip](const flip_data & m) -> bool
+                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
                     {
-                        return m.rip == rip;
+                        return (m.rip == rip && m.flags == flags);
                     });
                     if (flip_it != g_flip_log.end())
                     {
@@ -285,6 +287,7 @@ public:
         /// 6 = write_to_c_page(int_t from_va, int_t to_va, size_t size)
         /// 7 = get_flip_num()
         /// 8 = get_flip_data(int_t out_addr, int_t out_size)
+        /// 9 = clear_flip_data()
         ///
         /// <r03+> for args
         ///
@@ -316,10 +319,14 @@ public:
                 regs.r02 = static_cast<uintptr_t>(write_to_c_page(regs.r03, regs.r04, regs.r05));
                 break;
             case 7: // get_flip_num()
-                regs.r02 = g_flip_log.size();
+                regs.r02 = get_flip_num();
                 break;
             case 8: // get_flip_data(int_t out_addr, int_t out_size)
                 regs.r02 = static_cast<uintptr_t>(get_flip_data(regs.r03, regs.r04));
+                break;
+            case 9: // clear_flip_data()
+                regs.r02 = static_cast<uintptr_t>(clear_flip_data());
+                break;
             default:
                 regs.r02 = -1u;
                 break;
@@ -515,7 +522,7 @@ private:
                 // so don't deactive the split yet.
                 // Also decrease the hook counter.
                 bfdebug << "deactivate_split: other hooks found on this page: " << view_as_pointer(d_pa) << bfendl;
-                bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
+                bfdebug << "deactivate_split: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
 
                 std::lock_guard<std::mutex> guard(g_mutex);
                 split_it->second->num_hooks--;
@@ -524,8 +531,8 @@ private:
 
             // We have found the relevant split context.
             //
-            bfdebug << "deactivate_split: deactivating split for: " << view_as_pointer(d_pa) << bfendl;
-            bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
+            bfwarning << "deactivate_split: deactivating split for: " << view_as_pointer(d_pa) << bfendl;
+            bfdebug << "deactivate_split: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
 
             // Flip to data page and restore to default flags
             std::lock_guard<std::mutex> guard(g_mutex);
@@ -616,23 +623,31 @@ private:
     ///
     /// @param gva the guest virtual address of the page to check
     ///
-    /// @return 1 if split, 0 if not
+    /// @return 1 if split, 0 if not and -1 if page is not present
     ///
     int
     is_split(int_t gva)
     {
         expects(gva != 0);
 
-        // Get the physical aligned (4k) data page address.
-        auto &&cr3 = vmcs::guest_cr3::get();
-        auto &&mask_4k = ~(ept::pt::size_bytes - 1);
-        auto &&d_va = gva & mask_4k;
-        auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
+        try
+        {
+            // Get the physical aligned (4k) data page address.
+            auto &&cr3 = vmcs::guest_cr3::get();
+            auto &&mask_4k = ~(ept::pt::size_bytes - 1);
+            auto &&d_va = gva & mask_4k;
+            auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
-        // Check for match in <map> m_splits.
-        auto &&split_it = g_splits.find(d_pa);
-        if (split_it != g_splits.end())
-            return split_it->second->active ? 1 : 0;
+            // Check for match in <map> m_splits.
+            auto &&split_it = g_splits.find(d_pa);
+            if (split_it != g_splits.end())
+                return split_it->second->active ? 1 : 0;
+        }
+        catch (std::exception&)
+        {
+            bfwarning << "is_split: " << "page doesn't seem to be present" << bfendl;
+            return -1;
+        }
 
         return 0;
     }
@@ -738,6 +753,14 @@ private:
         return 0;
     }
 
+    /// Returns the number of elements in the flip log.
+    ///
+    size_t
+    get_flip_num()
+    {
+        return g_flip_log.size();
+    }
+
     /// Writes the flip data to the passed <out_addr>.
     ///
     /// @expects out_addr != 0
@@ -759,6 +782,16 @@ private:
         // Copy the flip data to the mapped memory region.
         std::memmove(omap.get(), g_flip_log.data(), out_size);
 
+        return 1;
+    }
+
+    /// Clears the flip data log.
+    ///
+    int
+    clear_flip_data()
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        g_flip_log.clear();
         return 1;
     }
 };
