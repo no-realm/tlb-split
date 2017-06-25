@@ -108,8 +108,6 @@ public:
             //          specifically states not to invalidate as the hardware is
             //          doing this for you.
 
-            std::lock_guard<std::mutex> guard(g_mutex);
-
             // Get cr3, mask, gva and gpa
             auto &&cr3 = vmcs::guest_cr3::get();
             auto &&mask = ~(ept::pt::size_bytes - 1);
@@ -142,6 +140,7 @@ public:
                       << " flags: " << view_as_pointer(flags)
                       << bfendl;
 
+                    std::lock_guard<std::mutex> guard(g_mutex);
                     auto &&entry = g_root_ept->gpa_to_epte(gpa);
                     entry.pass_through_access();
                 }
@@ -174,11 +173,13 @@ public:
                     if (flip_it != g_flip_log.end())
                     {
                         // Increase counter
+                        std::lock_guard<std::mutex> guard(g_mutex);
                         flip_it->counter++;
                     }
                     else
                     {
                         // Add violation data to the flip log.
+                        std::lock_guard<std::mutex> guard(g_mutex);
                         g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
                     }
 
@@ -197,11 +198,13 @@ public:
                     if (flip_it != g_flip_log.end())
                     {
                         // Increase counter
+                        std::lock_guard<std::mutex> guard(g_mutex);
                         flip_it->counter++;
                     }
                     else
                     {
                         // Add violation data to the flip log.
+                        std::lock_guard<std::mutex> guard(g_mutex);
                         g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
                     }
 
@@ -210,6 +213,7 @@ public:
                         bferror << "handle_exit: READ|EXEC violation. Not handled for now. gpa: " << view_as_pointer(d_pa) << bfendl;
                     }
 
+                    std::lock_guard<std::mutex> guard(g_mutex);
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(split_it->second->d_pa);
@@ -220,6 +224,7 @@ public:
                     // EXEC violation. Flip to code page.
                     //
 
+                    std::lock_guard<std::mutex> guard(g_mutex);
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(split_it->second->c_pa);
@@ -235,11 +240,13 @@ public:
                     if (flip_it != g_flip_log.end())
                     {
                         // Increase counter
+                        std::lock_guard<std::mutex> guard(g_mutex);
                         flip_it->counter++;
                     }
                     else
                     {
                         // Add violation data to the flip log.
+                        std::lock_guard<std::mutex> guard(g_mutex);
                         g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
                     }
 
@@ -346,8 +353,6 @@ private:
     {
         expects(gva != 0);
 
-        std::lock_guard<std::mutex> guard(g_mutex);
-
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
         auto &&mask_4k = ~(ept::pt::size_bytes - 1);
@@ -365,6 +370,7 @@ private:
             //
             bfdebug << "create_split_context: remapping page from 2m to 4k for: " << view_as_pointer(aligned_2m_pa) << bfendl;
 
+            std::lock_guard<std::mutex> guard(g_mutex);
             auto &&saddr = aligned_2m_pa;
             auto &&eaddr = aligned_2m_pa + ept::pd::size_bytes;
             g_root_ept->unmap(aligned_2m_pa);
@@ -387,6 +393,7 @@ private:
             bfdebug << "create_split_context: splitting page for: " << view_as_pointer(d_pa) << bfendl;
 
             // Create and assign unqiue split_context.
+            std::lock_guard<std::mutex> guard(g_mutex);
             CONTEXT(d_pa) = std::make_unique<split_context>();
             CONTEXT(d_pa)->gva = gva;
             CONTEXT(d_pa)->cr3 = cr3;
@@ -415,6 +422,7 @@ private:
         {
             // This page already got split. Just increase the hook counter.
             bfdebug << "create_split_context: page already split for: " << view_as_pointer(d_pa) << bfendl;
+            std::lock_guard<std::mutex> guard(g_mutex);
             CONTEXT(d_pa)->num_hooks++;
             bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
         }
@@ -434,8 +442,6 @@ private:
     activate_split(int_t gva)
     {
         expects(gva != 0);
-
-        std::lock_guard<std::mutex> guard(g_mutex);
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -461,9 +467,10 @@ private:
 
             // We assign the code page here, since that's the most
             // likely one to get used next.
+            std::lock_guard<std::mutex> guard(g_mutex);
             auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-            entry.trap_on_access();
             entry.set_phys_addr(split_it->second->c_pa);
+            entry.trap_on_access();
             entry.set_execute_access(true);
 
             // Invalidate/Flush TLB
@@ -492,8 +499,6 @@ private:
     {
         expects(gva != 0);
 
-        std::lock_guard<std::mutex> guard(g_mutex);
-
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
         auto &&mask_4k = ~(ept::pt::size_bytes - 1);
@@ -511,6 +516,8 @@ private:
                 // Also decrease the hook counter.
                 bfdebug << "deactivate_split: other hooks found on this page: " << view_as_pointer(d_pa) << bfendl;
                 bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
+
+                std::lock_guard<std::mutex> guard(g_mutex);
                 split_it->second->num_hooks--;
                 return 1;
             }
@@ -521,6 +528,7 @@ private:
             bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
 
             // Flip to data page and restore to default flags
+            std::lock_guard<std::mutex> guard(g_mutex);
             auto &&entry = g_root_ept->gpa_to_epte(d_pa);
             entry.set_phys_addr(split_it->second->d_pa);
             entry.pass_through_access();
@@ -591,8 +599,6 @@ private:
     int
     deactivate_all_splits()
     {
-        std::lock_guard<std::mutex> guard(g_mutex);
-
         bfdebug << "deactivate_all_splits: deactivating all splits. current num of splits: " << g_splits.size() << bfendl;
 
         for (const auto & split : g_splits)
@@ -650,8 +656,6 @@ private:
         expects(to_va != 0);
         expects(size >= 1);
 
-        std::lock_guard<std::mutex> guard(g_mutex);
-
         // Logging params
         bfdebug << "write_to_c_page: from_va: " << view_as_pointer(from_va) << ", to_va: " << view_as_pointer(to_va)<< ", size: " << view_as_pointer(size) << bfendl;
 
@@ -699,6 +703,8 @@ private:
                 if (bytes_1st_page + bytes_2nd_page != size)
                     bfwarning << "write_to_c_page: sum of bytes doesn't equal original size: " << size << ", bytes_1st_page: " << bytes_1st_page << ", bytes_2nd_page: " << bytes_2nd_page << bfendl;
 
+                std::lock_guard<std::mutex> guard(g_mutex);
+
                 // Map <from_va> memory into VMM (Host) memory.
                 auto &&vmm_data = bfn::make_unique_map_x64<uint8_t>(from_va, cr3, size, vmcs::guest_ia32_pat::get());
 
@@ -714,6 +720,8 @@ private:
 
                 // Get write offset
                 auto &&write_offset = to_va - d_va;
+
+                std::lock_guard<std::mutex> guard(g_mutex);
 
                 // Map <from_va> memory into VMM (Host) memory.
                 auto &&vmm_data = bfn::make_unique_map_x64<uint8_t>(from_va, cr3, size, vmcs::guest_ia32_pat::get());
