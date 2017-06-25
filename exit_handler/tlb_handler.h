@@ -108,6 +108,8 @@ public:
             //          specifically states not to invalidate as the hardware is
             //          doing this for you.
 
+            std::lock_guard<std::mutex> guard(g_mutex);
+
             // Get cr3, mask, gva and gpa
             auto &&cr3 = vmcs::guest_cr3::get();
             auto &&mask = ~(ept::pt::size_bytes - 1);
@@ -155,9 +157,6 @@ public:
             }
             else
             {
-                // Lock guard
-                std::lock_guard<std::mutex> guard(g_mutex);
-
                 // Save rip
                 auto &&rip = m_state_save->rip;
 
@@ -283,9 +282,11 @@ public:
         /// <r03+> for args
         ///
 
-        switch (regs.r02)
+        // Default to failed operation.
+        auto _switch = regs.r02;
+        regs.r02 = 0;
+        switch (_switch)
         {
-
             case 0: // hv_present()
                 regs.r02 = static_cast<uintptr_t>(hv_present());
                 break;
@@ -344,6 +345,8 @@ private:
     create_split_context(int_t gva)
     {
         expects(gva != 0);
+
+        std::lock_guard<std::mutex> guard(g_mutex);
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -406,12 +409,14 @@ private:
             CONTEXT(d_pa)->num_hooks = 1;
             g_2m_pages[aligned_2m_pa]++;
             bfdebug << "create_split_context: splits in this (2m) range: " << g_2m_pages[aligned_2m_pa] << bfendl;
+            bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
         }
         else
         {
             // This page already got split. Just increase the hook counter.
             bfdebug << "create_split_context: page already split for: " << view_as_pointer(d_pa) << bfendl;
             CONTEXT(d_pa)->num_hooks++;
+            bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
         }
 
         return 1;
@@ -429,6 +434,8 @@ private:
     activate_split(int_t gva)
     {
         expects(gva != 0);
+
+        std::lock_guard<std::mutex> guard(g_mutex);
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
@@ -451,8 +458,6 @@ private:
             // We have found the relevant split context.
             //
             bfdebug << "activate_split: activating split for: " << view_as_pointer(d_pa) << bfendl;
-
-            std::lock_guard<std::mutex> guard(g_mutex);
 
             // We assign the code page here, since that's the most
             // likely one to get used next.
@@ -487,6 +492,8 @@ private:
     {
         expects(gva != 0);
 
+        std::lock_guard<std::mutex> guard(g_mutex);
+
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();
         auto &&mask_4k = ~(ept::pt::size_bytes - 1);
@@ -503,6 +510,7 @@ private:
                 // so don't deactive the split yet.
                 // Also decrease the hook counter.
                 bfdebug << "deactivate_split: other hooks found on this page: " << view_as_pointer(d_pa) << bfendl;
+                bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
                 split_it->second->num_hooks--;
                 return 1;
             }
@@ -510,8 +518,7 @@ private:
             // We have found the relevant split context.
             //
             bfdebug << "deactivate_split: deactivating split for: " << view_as_pointer(d_pa) << bfendl;
-
-            std::lock_guard<std::mutex> guard(g_mutex);
+            bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
 
             // Flip to data page and restore to default flags
             auto &&entry = g_root_ept->gpa_to_epte(d_pa);
@@ -584,9 +591,11 @@ private:
     int
     deactivate_all_splits()
     {
+        std::lock_guard<std::mutex> guard(g_mutex);
+
         bfdebug << "deactivate_all_splits: deactivating all splits. current num of splits: " << g_splits.size() << bfendl;
 
-        for (auto & split : g_splits)
+        for (const auto & split : g_splits)
         {
             bfdebug << "deactivate_all_splits: deactivating split for: " << view_as_pointer(split.second->d_pa) << bfendl;
             deactivate_split(split.second->d_va);
@@ -640,6 +649,8 @@ private:
         expects(from_va != 0);
         expects(to_va != 0);
         expects(size >= 1);
+
+        std::lock_guard<std::mutex> guard(g_mutex);
 
         // Logging params
         bfdebug << "write_to_c_page: from_va: " << view_as_pointer(from_va) << ", to_va: " << view_as_pointer(to_va)<< ", size: " << view_as_pointer(size) << bfendl;
@@ -731,6 +742,8 @@ private:
     {
         expects(out_addr != 0);
         expects(out_size != 0);
+
+        std::lock_guard<std::mutex> guard(g_mutex);
 
         // Map the required memory.
         auto &&omap = bfn::make_unique_map_x64<char>(out_addr, vmcs::guest_cr3::get(), out_size, vmcs::guest_ia32_pat::get());
