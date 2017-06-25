@@ -7,6 +7,7 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <algorithm>
 #include <limits.h>
 
 using int_t = uintptr_t;
@@ -281,6 +282,12 @@ main(int argc, const char *argv[])
         regs.r03 = reinterpret_cast<int_t>(local_flip_log.data());
         regs.r04 = data_num * sizeof(flip_data);
         ctl.call_ioctl_vmcall(&regs, 0);
+
+        // Sort the flip data log by RIP and counter (ascending).
+        std::sort(local_flip_log.begin(), local_flip_log.end(), [](const flip_data& a, const flip_data& b)
+        {
+            return (a.rip < b.rip) || (a.rip == b.rip && a.counter < b.counter);
+        });
 
         for (const auto & flip : local_flip_log)
         {
