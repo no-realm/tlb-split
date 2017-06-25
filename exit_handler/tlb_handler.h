@@ -50,9 +50,10 @@ struct flip_data {
     int_t d_pa = 0;
     int_t cr3 = 0;
     int_t flags = 0;
+    int_t counter = 0;
 
     flip_data() = default;
-    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _flags)
+    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _flags, int_t _counter)
     {
         rip = _rip;
         gva = _gva;
@@ -61,6 +62,7 @@ struct flip_data {
         d_pa = _d_pa;
         cr3 = _cr3;
         flags = _flags;
+        counter = _counter;
     }
 
     ~flip_data() = default;
@@ -156,14 +158,30 @@ public:
                 // Lock guard
                 std::lock_guard<std::mutex> guard(g_mutex);
 
+                // Save rip
+                auto &&rip = m_state_save->rip;
+
                 // Check exit qualifications
                 if (access_t::write == (flags & access_t::write))
                 {
                     // WRITE violation. Deactivate split and flip to data page.
                     //
 
-                    // Add violation data to the flip log.
-                    g_flip_log.emplace_back(m_state_save->rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags);
+                    // Check for known RIPs.
+                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip](const flip_data & m) -> bool
+                    {
+                        return m.rip == rip;
+                    });
+                    if (flip_it != g_flip_log.end())
+                    {
+                        // Increase counter
+                        flip_it->counter++;
+                    }
+                    else
+                    {
+                        // Add violation data to the flip log.
+                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
+                    }
 
                     deactivate_split(gva);
                 }
@@ -172,8 +190,21 @@ public:
                     // READ violation. Flip to data page.
                     //
 
-                    // Add violation data to the flip log.
-                    g_flip_log.emplace_back(m_state_save->rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags);
+                    // Check for known RIPs.
+                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip](const flip_data & m) -> bool
+                    {
+                        return m.rip == rip;
+                    });
+                    if (flip_it != g_flip_log.end())
+                    {
+                        // Increase counter
+                        flip_it->counter++;
+                    }
+                    else
+                    {
+                        // Add violation data to the flip log.
+                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
+                    }
 
                     if (access_t::exec == (flags & access_t::exec))
                     {
@@ -197,8 +228,21 @@ public:
                 }
                 else
                 {
-                    // Add violation data to the flip log.
-                    g_flip_log.emplace_back(m_state_save->rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags);
+                    // Check for known RIPs.
+                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip](const flip_data & m) -> bool
+                    {
+                        return m.rip == rip;
+                    });
+                    if (flip_it != g_flip_log.end())
+                    {
+                        // Increase counter
+                        flip_it->counter++;
+                    }
+                    else
+                    {
+                        // Add violation data to the flip log.
+                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
+                    }
 
                     bfinfo << bfcolor_error << "UNX_Q" << bfcolor_end << ": gva: " << view_as_pointer(gva)
                       << " gpa: " << view_as_pointer(gpa)
@@ -300,6 +344,7 @@ private:
     create_split_context(int_t gva)
     {
         expects(gva != 0);
+        bfdebug << "create_split_context: gva: " << view_as_pointer(gva) << bfendl;
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();

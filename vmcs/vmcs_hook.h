@@ -8,7 +8,7 @@ using namespace intel_x64;
 using namespace vmcs;
 
 #ifndef MAX_PHYS_ADDR
-#define MAX_PHYS_ADDR 0x1000000000
+#define MAX_PHYS_ADDR 0x2000000000
 #endif
 
 std::unique_ptr<root_ept_intel_x64> g_root_ept;
