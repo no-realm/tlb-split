@@ -122,6 +122,7 @@ main(int argc, const char *argv[])
         /// 7 = get_flip_num()
         /// 8 = get_flip_data(int_t out_addr, int_t out_size)
         /// 9 = clear_flip_data()
+        /// 10 = remove_flip_entry(int_t rip)
         ///
         /// <r03+> for args
         ///
@@ -129,9 +130,9 @@ main(int argc, const char *argv[])
         int_t module_base = ida_base;
         if (argc == 2)
         {
-            std::string argstr{ argv[1] };
+            std::string cmd{ argv[1] };
 
-            if (argstr == "--clear" || argstr == "-c")
+            if (cmd == "--clear" || cmd == "-c")
             {
                 // VMCALL: Clear flip data log.
                 regs.r00 = VMCALL_REGISTERS;
@@ -141,10 +142,44 @@ main(int argc, const char *argv[])
                 std::cout << "flip data cleared" << std::endl;
                 exit(0);
             }
+            else if (cmd == "--help" || cmd == "-h")
+            {
+                std::cout << "Usage: hook.exe [OPTION] <arg>" << std::endl
+                    << "  --help, -h: Display this help message" << std::endl
+                    << "  --clear, -c: Clear flip data log" << std::endl
+                    << "  --remove, -r <addr>: Remove all entries with give address from flip data log" << std::endl
+                    << "  <addr>: Given address will be used as module base to normalize the data" << std::endl
+                    << std::endl
+                    ;
+                exit(0);
+            }
             else
             {
-                module_base = std::stoull(argv[1], 0, 16);
+                module_base = std::stoull(cmd, 0, 16);
                 std::cout << "Module Base: " << hex_out_s(module_base) << std::endl;
+            }
+        }
+        else if (argc == 3)
+        {
+            std::string cmd{ argv[1] };
+            std::string val{ argv[2] };
+
+            if (cmd == "--remove" || cmd == "-r")
+            {
+                auto &&addr = std::stoull(val, 0, 16);
+                // VMCALL: Clear flip data log.
+                regs.r00 = VMCALL_REGISTERS;
+                regs.r01 = VMCALL_MAGIC_NUMBER;
+                regs.r02 = 10;
+                regs.r03 = addr;
+                ctl.call_ioctl_vmcall(&regs, 0);
+                std::cout << "removed " << hex_out_s(addr) << " from flip data log" << std::endl;
+                exit(0);
+            }
+            else
+            {
+                std::cout << "unknown command" << std::endl;
+                exit(0);
             }
         }
 

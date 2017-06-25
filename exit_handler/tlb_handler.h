@@ -327,6 +327,9 @@ public:
             case 9: // clear_flip_data()
                 regs.r02 = static_cast<uintptr_t>(clear_flip_data());
                 break;
+            case 10: // remove_flip_entry(int_t rip)
+                regs.r02 = static_cast<uintptr_t>(remove_flip_entry(regs.r03));
+                break;
             default:
                 regs.r02 = -1u;
                 break;
@@ -792,6 +795,30 @@ private:
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         g_flip_log.clear();
+        return 1;
+    }
+
+    /// Remove an entry from the flip data log by
+    /// providing a RIP address.
+    ///
+    /// @expects rip != 0
+    ///
+    /// @return 1
+    ///
+    int
+    remove_flip_entry(int_t rip)
+    {
+        expects(rip != 0);
+
+        std::lock_guard<std::mutex> guard(g_mutex);
+
+        // Find relevant entry/entries by provided RIP address.
+        auto &&vec = g_flip_log; // Shorter name.
+        vec.erase(std::remove_if(vec.begin(), vec.end(), [&rip](const flip_data & o)
+        {
+            return o.rip == rip;
+        }), vec.end());
+
         return 1;
     }
 };
