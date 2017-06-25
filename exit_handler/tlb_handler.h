@@ -344,7 +344,6 @@ private:
     create_split_context(int_t gva)
     {
         expects(gva != 0);
-        bfdebug << "create_split_context: gva: " << view_as_pointer(gva) << bfendl;
 
         // Get the physical aligned (4k) data page address.
         auto &&cr3 = vmcs::guest_cr3::get();

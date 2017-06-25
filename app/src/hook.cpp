@@ -87,11 +87,24 @@ std::string hex_out_s(T val, int width = (sizeof(T) * CHAR_BIT / detail::HEX_DIG
     return sformatter.str();
 }
 
+const int_t ida_base = 0x140000000ull;
+
+template<typename T>
+auto
+transl(T addr, const int_t base)
+{
+    return addr - base + ida_base;
+}
+
 int
 main(int argc, const char *argv[])
 {
-    (void) argc;
-    (void) argv;
+    int_t module_base = ida_base;
+    if (argc == 2)
+    {
+        module_base = std::stoull(argv[1], 0, 16);
+        std::cout << "Module Base: " << hex_out_s(module_base) << std::endl;
+    }
 
     vmcall_registers_t regs;
 
@@ -226,9 +239,9 @@ main(int argc, const char *argv[])
               << ((flip.flags & access_t::write) == access_t::write ? "W" : "-")
               << ((flip.flags & access_t::exec) == access_t::exec   ? "X" : "-")
               << "]:"
-              << " rip: " << hex_out_s(flip.rip)
-              << " gva: " << hex_out_s(flip.gva)
-              << " orig_gva: " << hex_out_s(flip.orig_gva)
+              << " rip: " << hex_out_s(transl(flip.rip, module_base))
+              << " gva: " << hex_out_s(transl(flip.gva, module_base))
+              << " orig_gva: " << hex_out_s(transl(flip.orig_gva, module_base))
               //<< " gpa: " << hex_out_s(flip.gpa)
               //<< " d_pa: " << hex_out_s(flip.d_pa)
               << " cr3: " << hex_out_s(flip.cr3, 8)
