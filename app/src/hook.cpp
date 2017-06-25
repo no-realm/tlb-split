@@ -124,7 +124,7 @@ main(int argc, const char *argv[])
         regs.r01 = VMCALL_MAGIC_NUMBER;
         regs.r02 = 0;
         ctl.call_ioctl_vmcall(&regs, 0);
-        std::cout << "hv_present: " << (regs.r02 == 1 ? "yes" : "no") << std::endl;
+        //std::cout << "hv_present: " << (regs.r02 == 1 ? "yes" : "no") << std::endl;
 
         /*
         // VMCALL: Check if page is split.
@@ -231,7 +231,7 @@ main(int argc, const char *argv[])
               << " orig_gva: " << hex_out_s(flip.orig_gva)
               //<< " gpa: " << hex_out_s(flip.gpa)
               //<< " d_pa: " << hex_out_s(flip.d_pa)
-              << " cr3: " << hex_out_s(flip.cr3, 9)
+              << " cr3: " << hex_out_s(flip.cr3, 8)
               << " counter: " << flip.counter
               //<< " flags: " << hex_out_s(flip.flags, 3)
               << std::endl;
