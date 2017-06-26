@@ -324,6 +324,7 @@ public:
         /// 7 = get_flip_num()
         /// 8 = get_flip_data(int_t out_addr, int_t out_size)
         /// 9 = clear_flip_data()
+        /// 10 = remove_flip_entry(int_t rip)
         ///
         /// <r03+> for args
         ///
