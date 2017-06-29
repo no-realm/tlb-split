@@ -291,6 +291,10 @@ main(int argc, const char *argv[])
 
         for (const auto & flip : local_flip_log)
         {
+            // Filter out execute only flips.
+            if ((flip.flags & access_t::exec) == access_t::exec && (((flip.flags & access_t::read) == 0) || ((flip.flags & access_t::write) == 0)))
+                continue;
+
             std::cout
               << "["
               << ((flip.flags & access_t::read) == access_t::read   ? "R" : "-")

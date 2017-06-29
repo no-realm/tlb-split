@@ -112,6 +112,7 @@ std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>> g_splits;
 std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>          g_2m_pages;
 std::vector<flip_data> g_flip_log;
 static std::mutex g_mutex;
+static std::mutex g_flip_mutex;
 
 #define CONTEXT(_d_pa) g_splits[_d_pa]
 #define IT(_split_it) _split_it->second
@@ -142,12 +143,13 @@ public:
             //          specifically states not to invalidate as the hardware is
             //          doing this for you.
 
-            // Get cr3, mask, gva and gpa
+            // Get cr3, mask, gva, gpa, d_pa and rip
             auto &&cr3 = vmcs::guest_cr3::get();
             auto &&mask = ~(ept::pt::size_bytes - 1);
             auto &&gva = vmcs::guest_linear_address::get();
             auto &&gpa = vmcs::guest_physical_address::get();
             auto &&d_pa = gpa & mask;
+            auto &&rip = m_state_save->rip;
 
             // Get violation access flags.
             int_t flags = 0x000
@@ -177,30 +179,30 @@ public:
             }
             else
             {
-                // Save rip
-                auto &&rip = m_state_save->rip;
+                // Check for known RIPs.
+                auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
+                {
+                    return (m.rip == rip && m.flags == flags);
+                });
+                if (flip_it != g_flip_log.end())
+                {
+                    // Increase counter and update addresses.
+                    std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
+                    flip_it->counter++;
+                    flip_it->gva = gva;
+                    flip_it->gpa = gpa;
+                    flip_it->d_pa = d_pa;
+                }
+                else
+                {
+                    // Add violation data to the flip log.
+                    std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
+                    g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
+                }
 
                 // Check exit qualifications
                 if (access_t::write == (flags & access_t::write))
                 {
-                    // Check for known RIPs.
-                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
-                    {
-                        return (m.rip == rip && m.flags == flags);
-                    });
-                    if (flip_it != g_flip_log.end())
-                    {
-                        // Increase counter
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        flip_it->counter++;
-                    }
-                    else
-                    {
-                        // Add violation data to the flip log.
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
-                    }
-
                     if (split_it->second->cr3 != cr3)
                     {
                         // WRITE violation. Deactivate split and flip to data page.
@@ -224,29 +226,6 @@ public:
                     // READ violation. Flip to data page.
                     //
 
-                    // Check for known RIPs.
-                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
-                    {
-                        return (m.rip == rip && m.flags == flags);
-                    });
-                    if (flip_it != g_flip_log.end())
-                    {
-                        // Increase counter
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        flip_it->counter++;
-                    }
-                    else
-                    {
-                        // Add violation data to the flip log.
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
-                    }
-
-                    if (access_t::exec == (flags & access_t::exec))
-                    {
-                        bferror << "handle_exit: READ|EXEC violation. Not handled for now. gpa: " << hex_out_s(d_pa) << bfendl;
-                    }
-
                     std::lock_guard<std::mutex> guard(g_mutex);
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
@@ -269,24 +248,6 @@ public:
                 {
                     // This shouldn't even be possible...
                     //
-
-                    // Check for known RIPs.
-                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
-                    {
-                        return (m.rip == rip && m.flags == flags);
-                    });
-                    if (flip_it != g_flip_log.end())
-                    {
-                        // Increase counter
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        flip_it->counter++;
-                    }
-                    else
-                    {
-                        // Add violation data to the flip log.
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
-                    }
 
                     bfinfo << bfcolor_error << "UNX_Q" << bfcolor_end << ": gva: " << hex_out_s(gva)
                       << " gpa: " << hex_out_s(gpa)
@@ -798,6 +759,7 @@ private:
     size_t
     get_flip_num()
     {
+        std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
         return g_flip_log.size();
     }
 
@@ -814,7 +776,7 @@ private:
         expects(out_addr != 0);
         expects(out_size != 0);
 
-        std::lock_guard<std::mutex> guard(g_mutex);
+        std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
 
         // Map the required memory.
         auto &&omap = bfn::make_unique_map_x64<char>(out_addr, vmcs::guest_cr3::get(), out_size, vmcs::guest_ia32_pat::get());
@@ -830,7 +792,7 @@ private:
     int
     clear_flip_data()
     {
-        std::lock_guard<std::mutex> guard(g_mutex);
+        std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
         g_flip_log.clear();
         return 1;
     }
@@ -847,7 +809,7 @@ private:
     {
         expects(rip != 0);
 
-        std::lock_guard<std::mutex> guard(g_mutex);
+        std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
 
         // Find relevant entry/entries by provided RIP address.
         auto &&vec = g_flip_log; // Shorter name.

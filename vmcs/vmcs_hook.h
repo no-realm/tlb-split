@@ -50,6 +50,8 @@ public:
             // Since EPT in the Extended APIs is global, we should only set it
             // up once.
             initialized = true;
+
+            bfdebug << "vmcs_hook: set up identity map (2m)" << bfendl;
         }
 
         // Enable EPT and VPID. If your going to use EPT, you really should be
