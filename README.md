@@ -23,6 +23,8 @@ git clone https://github.com/Randshot/tlb-split.git src_tlb_split
 
 ./tools/scripts/setup_cygwin.sh --no-configure
 
+./configure -m ./extended_apis/bin/extended_apis.modules
+
 cd ..
 mkdir build
 cd build
