@@ -494,25 +494,8 @@ private:
         return 0;
     }
 
-    /// Deactivates (and frees) a split
-    ///
-    /// @expects gva != 0
-    ///
-    /// @param gva the guest virtual address of the page to deactivate
-    ///
-    /// @return 1 for success, 0 for failure
-    ///
-    int
-    deactivate_split(int_t gva)
-    {
-        expects(gva != 0);
-
-        // Get the physical aligned (4k) data page address.
-        auto &&cr3 = vmcs::guest_cr3::get();
-        auto &&mask_4k = ~(ept::pt::size_bytes - 1);
-        auto &&d_va = gva & mask_4k;
-        auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
-
+    int 
+    deactivate_split_pa(int_t d_pa) {
         // Search for relevant entry in <map> m_splits.
         auto &&split_it = g_splits.find(d_pa);
         if (split_it != g_splits.end())
@@ -598,8 +581,28 @@ private:
         }
         else
             bfwarning << "deactivate_split: no split found for: " << hex_out_s(d_pa) << bfendl;
-
         return 0;
+    }
+    /// Deactivates (and frees) a split
+    ///
+    /// @expects gva != 0
+    ///
+    /// @param gva the guest virtual address of the page to deactivate
+    ///
+    /// @return 1 for success, 0 for failure
+    ///
+    int
+    deactivate_split(int_t gva)
+    {
+        expects(gva != 0);
+
+        // Get the physical aligned (4k) data page address.
+        auto &&cr3 = vmcs::guest_cr3::get();
+        auto &&mask_4k = ~(ept::pt::size_bytes - 1);
+        auto &&d_va = gva & mask_4k;
+        auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
+
+        return deactivate_split_pa(d_pa);
     }
 
     /// Deactivates (and frees) all splits
@@ -609,10 +612,11 @@ private:
     {
         bfdebug << "deactivate_all_splits: deactivating all splits. current num of splits: " << g_splits.size() << bfendl;
 
-        for (const auto & split : g_splits)
+        while (!g_splits.empty())
         {
-            bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(split.second->d_pa) << bfendl;
-            deactivate_split(split.second->gva);
+	    const auto & split = g_splits.begin();
+            bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(split->second->d_pa) << bfendl;
+            deactivate_split_pa(split->second->d_pa);
         }
 
         return 1;

@@ -189,7 +189,7 @@ main(int argc, const char *argv[])
         regs.r01 = VMCALL_MAGIC_NUMBER;
         regs.r02 = 0;
         ctl.call_ioctl_vmcall(&regs, 0);
-        //std::cout << "hv_present: " << (regs.r02 == 1 ? "yes" : "no") << std::endl;
+        std::cout << "hv_present: " << (regs.r02 == 1 ? "yes" : "no") << std::endl;
 
         /*
         // VMCALL: Check if page is split.
