@@ -12,6 +12,7 @@
 #include <vmcs/vmcs_intel_x64_natural_width_guest_state_fields.h>
 #include <vmcs/vmcs_intel_x64_natural_width_read_only_data_fields.h>
 #include <exit_handler/exit_handler_intel_x64_eapis.h>
+#include <serial/serial_port_intel_x64.h>
 
 #include <limits.h>
 #include <algorithm>
@@ -119,12 +120,18 @@ static std::mutex g_flip_mutex;
 
 class tlb_handler : public exit_handler_intel_x64_eapis
 {
+private:
+    unsigned long last_exec_rip, last_read_rip;
+    int last_exec_count,last_read_count;
+
 public:
 
     /// Default Constructor
     ///
-    tlb_handler()
-    { }
+    tlb_handler () : last_exec_rip(0), last_read_rip(0), last_exec_count(0), last_read_count(0)
+    { 
+	bfinfo << "tlb_handler instance initialized" << bfendl; 
+    }
 
     /// Destructor
     ///
@@ -214,6 +221,7 @@ public:
                     {
                         // Switch to data page.
                         std::lock_guard<std::mutex> guard(g_mutex);
+                        bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                         entry.trap_on_access();
                         entry.set_phys_addr(split_it->second->d_pa);
@@ -227,11 +235,18 @@ public:
                     //
 
                     std::lock_guard<std::mutex> guard(g_mutex);
+                    bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(split_it->second->d_pa);
                     entry.set_read_access(true);
                     entry.set_write_access(true);
+		    if ( rip == last_read_rip ) {
+			last_read_count++;
+		    } else {
+			last_read_rip = rip;
+			last_read_count = 0;
+                    }
                 }
                 else if(access_t::exec == (flags & access_t::exec))
                 {
@@ -239,10 +254,17 @@ public:
                     //
 
                     std::lock_guard<std::mutex> guard(g_mutex);
+                    bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(split_it->second->c_pa);
                     entry.set_execute_access(true);
+		    if ( rip == last_exec_rip ) {
+			last_exec_count++;
+		    } else {
+			last_exec_rip = rip;
+			last_exec_count = 0;
+                    }
                 }
                 else
                 {
@@ -256,6 +278,15 @@ public:
                       << " flags: " << hex_out_s(flags, 3)
                       << bfendl;
                 }
+		if ( ( last_exec_rip == last_read_rip ) && ( ( last_exec_count + last_read_count ) >= 4 ) ) {
+                    bfinfo << bfcolor_warning << "Thrashing detected at " << bfcolor_end << "rip: " << hex_out_s(last_exec_rip) << bfendl;
+		    last_exec_rip = 0;
+		    last_read_rip = 0;
+		    last_exec_count = 0;
+		    last_read_count = 0;
+            	    vmx::invvpid_all_contexts();
+                    vmx::invept_global();
+		}
             }
 
             // Resume the VM
