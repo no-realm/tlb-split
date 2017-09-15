@@ -128,9 +128,13 @@ public:
 
     /// Default Constructor
     ///
-    tlb_handler () : last_exec_rip(0), last_read_rip(0), last_exec_count(0), last_read_count(0)
-    { 
-	bfinfo << "tlb_handler instance initialized" << bfendl; 
+    tlb_handler ()
+        : last_exec_rip(0),
+          last_read_rip(0),
+          last_exec_count(0),
+          last_read_count(0)
+    {
+        bfinfo << "tlb_handler instance initialized" << bfendl;
     }
 
     /// Destructor
@@ -241,12 +245,17 @@ public:
                     entry.set_phys_addr(split_it->second->d_pa);
                     entry.set_read_access(true);
                     entry.set_write_access(true);
-		    if ( rip == last_read_rip ) {
-			last_read_count++;
-		    } else {
-			last_read_rip = rip;
-			last_read_count = 0;
+
+                    if ( rip == last_read_rip )
+                    {
+                        last_read_count++;
                     }
+                    else
+                    {
+                        last_read_rip = rip;
+                        last_read_count = 0;
+                    }
+
                 }
                 else if(access_t::exec == (flags & access_t::exec))
                 {
@@ -259,11 +268,15 @@ public:
                     entry.trap_on_access();
                     entry.set_phys_addr(split_it->second->c_pa);
                     entry.set_execute_access(true);
-		    if ( rip == last_exec_rip ) {
-			last_exec_count++;
-		    } else {
-			last_exec_rip = rip;
-			last_exec_count = 0;
+
+                    if ( rip == last_read_rip )
+                    {
+                        last_read_count++;
+                    }
+                    else
+                    {
+                        last_read_rip = rip;
+                        last_read_count = 0;
                     }
                 }
                 else
@@ -278,15 +291,19 @@ public:
                       << " flags: " << hex_out_s(flags, 3)
                       << bfendl;
                 }
-		if ( ( last_exec_rip == last_read_rip ) && ( ( last_exec_count + last_read_count ) >= 4 ) ) {
+
+                if ( ( last_exec_rip == last_read_rip ) && ( ( last_exec_count + last_read_count ) >= 4 ) )
+                {
                     bfinfo << bfcolor_warning << "Thrashing detected at " << bfcolor_end << "rip: " << hex_out_s(last_exec_rip) << bfendl;
-		    last_exec_rip = 0;
-		    last_read_rip = 0;
-		    last_exec_count = 0;
-		    last_read_count = 0;
-            	    vmx::invvpid_all_contexts();
+
+                    last_exec_rip = 0;
+                    last_read_rip = 0;
+                    last_exec_count = 0;
+                    last_read_count = 0;
+
+                    vmx::invvpid_all_contexts();
                     vmx::invept_global();
-		}
+                }
             }
 
             // Resume the VM
@@ -525,7 +542,7 @@ private:
         return 0;
     }
 
-    int 
+    int
     deactivate_split_pa(int_t d_pa) {
         // Search for relevant entry in <map> m_splits.
         auto &&split_it = g_splits.find(d_pa);
