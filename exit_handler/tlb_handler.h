@@ -73,7 +73,7 @@ struct split_context {
     int_t gva = 0;          // The (guest) physical address this split was requested for. (Only first request.)
     size_t num_hooks = 0;   // This holds the number of hooks for this split context.
     uint64_t cr3 = 0;       // This is the cr3 value of the process which requested the split.
-    bool active = false;    // This defines whether this split is active.
+    bool active = false;    // This defines whether this split is active or not.
 };
 
 struct flip_data {
@@ -121,7 +121,7 @@ static std::mutex g_flip_mutex;
 class tlb_handler : public exit_handler_intel_x64_eapis
 {
 private:
-    unsigned long last_exec_rip, last_read_rip;
+    int_t last_exec_rip, last_read_rip;
     int last_exec_count,last_read_count;
 
 public:
@@ -129,10 +129,10 @@ public:
     /// Default Constructor
     ///
     tlb_handler ()
-        : last_exec_rip(0),
-          last_read_rip(0),
-          last_exec_count(0),
-          last_read_count(0)
+        : last_exec_rip(0)
+        , last_read_rip(0)
+        , last_exec_count(0)
+        , last_read_count(0)
     {
         bfinfo << "tlb_handler instance initialized" << bfendl;
     }
@@ -150,27 +150,27 @@ public:
         if (reason == vmcs::exit_reason::basic_exit_reason::ept_violation)
         {
             // WARNING: Do not use the invept or invvpid instructions in this
-            //          function. Doing so will cause an intifinite loop. Intel
+            //          function. Doing so will cause an infinite loop. Intel
             //          specifically states not to invalidate as the hardware is
             //          doing this for you.
 
             // Get cr3, mask, gva, gpa, d_pa and rip
-            auto &&cr3 = vmcs::guest_cr3::get();
-            auto &&mask = ~(ept::pt::size_bytes - 1);
-            auto &&gva = vmcs::guest_linear_address::get();
-            auto &&gpa = vmcs::guest_physical_address::get();
-            auto &&d_pa = gpa & mask;
-            auto &&rip = m_state_save->rip;
+            const auto &&cr3 = vmcs::guest_cr3::get();
+            const auto &&mask = ~(ept::pt::size_bytes - 1);
+            const auto &&gva = vmcs::guest_linear_address::get();
+            const auto &&gpa = vmcs::guest_physical_address::get();
+            const auto &&d_pa = gpa & mask;
+            const auto &&rip = m_state_save->rip;
 
             // Get violation access flags.
-            int_t flags = 0x000
+            const int_t flags = 0x000
                 | (vmcs::exit_qualification::ept_violation::data_read::is_enabled()         ? access_t::read    : 0x000)
                 | (vmcs::exit_qualification::ept_violation::data_write::is_enabled()        ? access_t::write   : 0x000)
                 | (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? access_t::exec    : 0x000)
                 ;
 
             // Search for relevant entry in <map> m_splits.
-            auto &&split_it = g_splits.find(d_pa);
+            const auto &&split_it = g_splits.find(d_pa);
             if (split_it == g_splits.end())
             {
                 // Unexpected EPT violation for this page.
@@ -195,6 +195,7 @@ public:
                 {
                     return (m.rip == rip && m.flags == flags);
                 });
+
                 if (flip_it != g_flip_log.end())
                 {
                     // Increase counter and update addresses.
@@ -208,13 +209,13 @@ public:
                 {
                     // Add violation data to the flip log.
                     std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
-                    g_flip_log.emplace_back(rip, gva, split_it->second->gva, gpa, d_pa, cr3, flags, 1);
+                    g_flip_log.emplace_back(rip, gva, IT(split_it)->gva, gpa, d_pa, cr3, flags, 1);
                 }
 
                 // Check exit qualifications
                 if (access_t::write == (flags & access_t::write))
                 {
-                    if (split_it->second->cr3 != cr3)
+                    if (IT(split_it)->cr3 != cr3)
                     {
                         // WRITE violation. Deactivate split and flip to data page.
                         //
@@ -228,7 +229,7 @@ public:
                         bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                         entry.trap_on_access();
-                        entry.set_phys_addr(split_it->second->d_pa);
+                        entry.set_phys_addr(IT(split_it)->d_pa);
                         entry.set_read_access(true);
                         entry.set_write_access(true);
                     }
@@ -242,11 +243,11 @@ public:
                     bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
-                    entry.set_phys_addr(split_it->second->d_pa);
+                    entry.set_phys_addr(IT(split_it)->d_pa);
                     entry.set_read_access(true);
                     entry.set_write_access(true);
 
-                    if ( rip == last_read_rip )
+                    if (rip == last_read_rip)
                     {
                         last_read_count++;
                     }
@@ -266,17 +267,17 @@ public:
                     bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
-                    entry.set_phys_addr(split_it->second->c_pa);
+                    entry.set_phys_addr(IT(split_it)->c_pa);
                     entry.set_execute_access(true);
 
-                    if ( rip == last_read_rip )
+                    if (rip == last_exec_rip)
                     {
-                        last_read_count++;
+                        last_exec_rip++;
                     }
                     else
                     {
-                        last_read_rip = rip;
-                        last_read_count = 0;
+                        last_exec_rip = rip;
+                        last_exec_count = 0;
                     }
                 }
                 else
@@ -292,17 +293,20 @@ public:
                       << bfendl;
                 }
 
-                if ( ( last_exec_rip == last_read_rip ) && ( ( last_exec_count + last_read_count ) >= 4 ) )
+                // Check for TLB thrashing
+                if ((last_exec_rip == last_read_rip) && ((last_exec_count + last_read_count) >= 4))
                 {
                     bfinfo << bfcolor_warning << "Thrashing detected at " << bfcolor_end << "rip: " << hex_out_s(last_exec_rip) << bfendl;
 
+                    // Reset
                     last_exec_rip = 0;
                     last_read_rip = 0;
                     last_exec_count = 0;
                     last_read_count = 0;
 
-                    vmx::invvpid_all_contexts();
-                    vmx::invept_global();
+                    // As mentioned in the warning above, this shouldn't be done here.
+                    //vmx::invvpid_all_contexts();
+                    //vmx::invept_global();
                 }
             }
 
@@ -339,8 +343,9 @@ public:
         ///
 
         // Default to failed operation.
-        auto _switch = regs.r02;
+        const auto _switch = regs.r02;
         regs.r02 = 0;
+
         switch (_switch)
         {
             case 0: // hv_present()
@@ -405,21 +410,21 @@ private:
     /// @return 1 for success, 0 for failure
     ///
     int
-    create_split_context(int_t gva)
+    create_split_context(const int_t gva)
     {
         expects(gva != 0);
 
         // Get the physical aligned (4k) data page address.
-        auto &&cr3 = vmcs::guest_cr3::get();
-        auto &&mask_4k = ~(ept::pt::size_bytes - 1);
-        auto &&d_va = gva & mask_4k;
-        auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
+        const auto &&cr3 = vmcs::guest_cr3::get();
+        const auto &&mask_4k = ~(ept::pt::size_bytes - 1);
+        const auto &&d_va = gva & mask_4k;
+        const auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
         // Check whether we have already remapped the relevant **2m** page.
-        auto &&mask_2m = ~(ept::pd::size_bytes - 1);
-        auto &&aligned_2m_pa = d_pa & mask_2m;
+        const auto &&mask_2m = ~(ept::pd::size_bytes - 1);
+        const auto &&aligned_2m_pa = d_pa & mask_2m;
 
-        auto &&aligned_2m_it = g_2m_pages.find(aligned_2m_pa);
+        const auto &&aligned_2m_it = g_2m_pages.find(aligned_2m_pa);
         if (aligned_2m_it == g_2m_pages.end())
         {
             // This (2m) page range has to be remapped to 4k.
@@ -427,8 +432,8 @@ private:
             bfdebug << "create_split_context: remapping page from 2m to 4k for: " << hex_out_s(aligned_2m_pa) << bfendl;
 
             std::lock_guard<std::mutex> guard(g_mutex);
-            auto &&saddr = aligned_2m_pa;
-            auto &&eaddr = aligned_2m_pa + ept::pd::size_bytes;
+            const auto &&saddr = aligned_2m_pa;
+            const auto &&eaddr = aligned_2m_pa + ept::pd::size_bytes;
             g_root_ept->unmap(aligned_2m_pa);
             g_root_ept->setup_identity_map_4k(saddr, eaddr);
             g_2m_pages[aligned_2m_pa] = 0;
@@ -441,7 +446,7 @@ private:
             bfdebug << "create_split_context: page already remapped: " << hex_out_s(aligned_2m_pa) << bfendl;
 
         // Check if we have already split the relevant **4k** page.
-        auto &&split_it = g_splits.find(d_pa);
+        const auto &&split_it = g_splits.find(d_pa);
         if (split_it == g_splits.end())
         {
             // We haven't split this page yet, so do it now.
@@ -462,12 +467,12 @@ private:
             CONTEXT(d_pa)->c_pa = g_mm->virtint_to_physint(CONTEXT(d_pa)->c_va);
 
             // Map data page into VMM (Host) memory.
-            auto &&vmm_data = bfn::make_unique_map_x64<uint8_t>(d_va, cr3, ept::pt::size_bytes, vmcs::guest_ia32_pat::get());
+            const auto &&vmm_data = bfn::make_unique_map_x64<uint8_t>(d_va, cr3, ept::pt::size_bytes, vmcs::guest_ia32_pat::get());
 
             // Copy contents of data page (VMM copy) to code page.
             std::memmove(reinterpret_cast<ptr_t>(CONTEXT(d_pa)->c_va), reinterpret_cast<ptr_t>(vmm_data.get()), ept::pt::size_bytes);
 
-            // Ensure that split is deactivated and increase split counter and set hook counter to 1.
+            // Ensure that split is deactivated, increase split counter and set hook counter to 1.
             CONTEXT(d_pa)->active = false;
             CONTEXT(d_pa)->num_hooks = 1;
             g_2m_pages[aligned_2m_pa]++;
@@ -495,15 +500,15 @@ private:
     /// @return 1 for success, 0 for failure
     ///
     int
-    activate_split(int_t gva)
+    activate_split(const int_t gva)
     {
         expects(gva != 0);
 
         // Get the physical aligned (4k) data page address.
-        auto &&cr3 = vmcs::guest_cr3::get();
-        auto &&mask_4k = ~(ept::pt::size_bytes - 1);
-        auto &&d_va = gva & mask_4k;
-        auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
+        const auto &&cr3 = vmcs::guest_cr3::get();
+        const auto &&mask_4k = ~(ept::pt::size_bytes - 1);
+        const auto &&d_va = gva & mask_4k;
+        const auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
         // Search for relevant entry in <map> m_splits.
         auto &&split_it = g_splits.find(d_pa);
@@ -533,6 +538,7 @@ private:
             vmx::invvpid_all_contexts();
             vmx::invept_global();
 
+            // Mark the split as active.
             IT(split_it)->active = true;
             return 1;
         }
@@ -542,8 +548,19 @@ private:
         return 0;
     }
 
+    /// Deactivates (and frees) a split for the given physical address
+    ///
+    /// @expects d_pa != 0
+    ///
+    /// @param d_pa the physical (4k) aligned address of the data page to deactivate
+    ///
+    /// @return 1 for success, 0 for failure
+    ///
     int
-    deactivate_split_pa(int_t d_pa) {
+    deactivate_split_pa(const int_t d_pa)
+    {
+        expects(d_pa != 0);
+
         // Search for relevant entry in <map> m_splits.
         auto &&split_it = g_splits.find(d_pa);
         if (split_it != g_splits.end())
@@ -552,9 +569,9 @@ private:
             {
                 // We still have other hooks on this page,
                 // so don't deactive the split yet.
-                // Also decrease the hook counter.
-                bfdebug << "deactivate_split: other hooks found on this page: " << hex_out_s(d_pa) << bfendl;
-                bfdebug << "deactivate_split: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
+                // Just decrease the hook counter.
+                bfdebug << "deactivate_split_pa: other hooks found on this page: " << hex_out_s(d_pa) << bfendl;
+                bfdebug << "deactivate_split_pa: # of hooks on this page (before): " << IT(split_it)->num_hooks << bfendl;
 
                 std::lock_guard<std::mutex> guard(g_mutex);
                 IT(split_it)->num_hooks--;
@@ -563,25 +580,28 @@ private:
 
             // We have found the relevant split context.
             //
-            bfwarning << "deactivate_split: deactivating split for: " << hex_out_s(d_pa) << bfendl;
-            bfdebug << "deactivate_split: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
+            bfwarning << "deactivate_split_pa: deactivating split for: " << hex_out_s(d_pa) << bfendl;
+            bfdebug << "deactivate_split_pa: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
 
-            // Flip to data page and restore to default flags
-            std::lock_guard<std::mutex> guard(g_mutex);
-            auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-            entry.set_phys_addr(IT(split_it)->d_pa);
-            entry.pass_through_access();
+            // Mutex block
+            {
+                // Flip to data page and restore to default flags
+                std::lock_guard<std::mutex> guard(g_mutex);
+                auto &&entry = g_root_ept->gpa_to_epte(d_pa);
+                entry.set_phys_addr(IT(split_it)->d_pa);
+                entry.pass_through_access();
+
+                // Erase split context from <map> m_splits.
+                g_splits.erase(d_pa);
+                bfdebug << "deactivate_split_pa: total num of splits: " << g_splits.size() << bfendl;
+            }
 
             // Invalidate/Flush TLB
             vmx::invvpid_all_contexts();
             vmx::invept_global();
 
-            // Erase split context from <map> m_splits.
-            g_splits.erase(d_pa);
-            bfdebug << "deactivate_split: total num of splits: " << g_splits.size() << bfendl;
-
             // Check if we have an adjacent split.
-            auto &&next_split_it = g_splits.find(d_pa + ept::pt::size_bytes);
+            const auto &&next_split_it = g_splits.find(d_pa + ept::pt::size_bytes);
             if (next_split_it != g_splits.end())
             {
                 // We found an adjacent split.
@@ -589,19 +609,19 @@ private:
                 if (IT(next_split_it)->num_hooks == 0)
                 {
                     // This is likely a page which got split when writing
-                    // to a code page while exceding the page bounds.
+                    // to a code page while exceeding the page bounds.
                     // Since this split isn't needed anymore, deactivate
                     // it too.
-                    bfdebug << "deactivate_split: deactivating adjacent split for: " << hex_out_s(IT(next_split_it)->d_pa) << bfendl;
+                    bfdebug << "deactivate_split_pa: deactivating adjacent split for: " << hex_out_s(IT(next_split_it)->d_pa) << bfendl;
                     deactivate_split(IT(next_split_it)->d_va);
                 }
             }
 
             // Decrease the split counter.
-            auto &&mask_2m = ~(ept::pd::size_bytes - 1);
-            auto &&aligned_2m_pa = d_pa & mask_2m;
+            const auto &&mask_2m = ~(ept::pd::size_bytes - 1);
+            const auto &&aligned_2m_pa = d_pa & mask_2m;
             g_2m_pages[aligned_2m_pa]--;
-            bfdebug << "deactivate_split: splits in this (2m) range: " << g_2m_pages[aligned_2m_pa] << bfendl;
+            bfdebug << "deactivate_split_pa: splits in this (2m) range: " << g_2m_pages[aligned_2m_pa] << bfendl;
             /*
             // Check whether we have to remap the 4k pages to a 2m page.
             if (g_2m_pages[aligned_2m_pa] == 0)
@@ -623,15 +643,16 @@ private:
                 g_2m_pages.erase(aligned_2m_pa);
             }
             //*/
-            bfdebug << "deactivate_split: total num of remapped (2m) pages: " << g_2m_pages.size() << bfendl;
+            bfdebug << "deactivate_split_pa: total num of remapped (2m) pages: " << g_2m_pages.size() << bfendl;
 
             return 1;
         }
         else
-            bfwarning << "deactivate_split: no split found for: " << hex_out_s(d_pa) << bfendl;
+            bfwarning << "deactivate_split_pa: no split found for: " << hex_out_s(d_pa) << bfendl;
         return 0;
     }
-    /// Deactivates (and frees) a split
+
+    /// Deactivates (and frees) a split for a given guest virtual address
     ///
     /// @expects gva != 0
     ///
@@ -640,15 +661,15 @@ private:
     /// @return 1 for success, 0 for failure
     ///
     int
-    deactivate_split(int_t gva)
+    deactivate_split(const int_t gva)
     {
         expects(gva != 0);
 
         // Get the physical aligned (4k) data page address.
-        auto &&cr3 = vmcs::guest_cr3::get();
-        auto &&mask_4k = ~(ept::pt::size_bytes - 1);
-        auto &&d_va = gva & mask_4k;
-        auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
+        const auto &&cr3 = vmcs::guest_cr3::get();
+        const auto &&mask_4k = ~(ept::pt::size_bytes - 1);
+        const auto &&d_va = gva & mask_4k;
+        const auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
         return deactivate_split_pa(d_pa);
     }
@@ -658,14 +679,23 @@ private:
     int
     deactivate_all_splits()
     {
-        bfdebug << "deactivate_all_splits: deactivating all splits. current num of splits: " << g_splits.size() << bfendl;
-
-        while (!g_splits.empty())
+        if (g_splits.size() > 0)
         {
-	    const auto & split = g_splits.begin();
-            bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(split->second->d_pa) << bfendl;
-            deactivate_split_pa(split->second->d_pa);
+            bfdebug << "deactivate_all_splits: deactivating all splits. current num of splits: " << g_splits.size() << bfendl;
+
+            // Iterating thorugh <map> g_splits until it is empty.
+            while (!g_splits.empty())
+            {
+                // Get the first split in the map.
+                const auto &&split_it = g_splits.begin();
+                bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(IT(split_it)->d_pa) << bfendl;
+
+                // Deactivating the split for a physical page address.
+                deactivate_split_pa(IT(split_it)->d_pa);
+            }
         }
+        else
+            bfdebug << "deactivate_all_splits: no active splits found" << bfendl;
 
         return 1;
     }
@@ -679,20 +709,20 @@ private:
     /// @return 1 if split, 0 if not and -1 if page is not present
     ///
     int
-    is_split(int_t gva)
+    is_split(const int_t gva)
     {
         expects(gva != 0);
 
         try
         {
             // Get the physical aligned (4k) data page address.
-            auto &&cr3 = vmcs::guest_cr3::get();
-            auto &&mask_4k = ~(ept::pt::size_bytes - 1);
-            auto &&d_va = gva & mask_4k;
-            auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
+            const auto &&cr3 = vmcs::guest_cr3::get();
+            const auto &&mask_4k = ~(ept::pt::size_bytes - 1);
+            const auto &&d_va = gva & mask_4k;
+            const auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
             // Check for match in <map> m_splits.
-            auto &&split_it = g_splits.find(d_pa);
+            const auto &&split_it = g_splits.find(d_pa);
             if (split_it != g_splits.end())
                 return IT(split_it)->active ? 1 : 0;
         }
@@ -718,7 +748,7 @@ private:
     /// @return 1 for success, 0 for failure
     ///
     int
-    write_to_c_page(int_t from_va, int_t to_va, size_t size)
+    write_to_c_page(const int_t from_va, const int_t to_va, const size_t size)
     {
         expects(from_va != 0);
         expects(to_va != 0);
@@ -728,18 +758,18 @@ private:
         bfdebug << "write_to_c_page: from_va: " << hex_out_s(from_va) << ", to_va: " << hex_out_s(to_va)<< ", size: " << hex_out_s(size) << bfendl;
 
         // Get the physical aligned (4k) data page address.
-        auto &&cr3 = vmcs::guest_cr3::get();
-        auto &&mask_4k = ~(ept::pt::size_bytes - 1);
-        auto &&d_va = to_va & mask_4k;
-        auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
+        const auto &&cr3 = vmcs::guest_cr3::get();
+        const auto &&mask_4k = ~(ept::pt::size_bytes - 1);
+        const auto &&d_va = to_va & mask_4k;
+        const auto &&d_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
         // Search for relevant entry in <map> m_splits.
-        auto &&split_it = g_splits.find(d_pa);
+        const auto &&split_it = g_splits.find(d_pa);
         if (split_it != g_splits.end())
         {
             // Check if we have to write to two consecutive pages.
-            auto &&start_range = to_va;
-            auto &&end_range = start_range + size - 1;
+            const auto &&start_range = to_va;
+            const auto &&end_range = start_range + size - 1;
             if ((end_range >> 12) > (start_range >> 12))
             {
                 // Get virt and phys address of second page.
@@ -759,14 +789,25 @@ private:
                     activate_split(end_va);
                 }
 
+                // Get second split
+                const auto &&second_split_it = g_splits.find(end_pa);
+                if (second_split_it == g_splits.end())
+                {
+                    // For some reason, the second page didn't get split.
+                    //
+                    bfwarning << "write_to_c_page: split for the second page failed: " << hex_out_s(end_pa) << bfendl;
+
+                    return 0;
+                }
+
                 // Get write offset.
-                auto &&write_offset = to_va - d_va;
+                const auto &&write_offset = to_va - d_va;
 
                 // Get bytes for first page.
-                auto &&bytes_1st_page = (d_va + ept::pt::size_bytes) - to_va - 1;
+                const auto &&bytes_1st_page = (d_va + ept::pt::size_bytes) - to_va - 1;
 
                 // Get bytes for second page.
-                auto &&bytes_2nd_page = end_range - end_va;
+                const auto &&bytes_2nd_page = end_range - end_va;
 
                 if (bytes_1st_page + bytes_2nd_page != size)
                     bfwarning << "write_to_c_page: sum of bytes doesn't equal original size: " << size << ", bytes_1st_page: " << bytes_1st_page << ", bytes_2nd_page: " << bytes_2nd_page << bfendl;
@@ -780,7 +821,7 @@ private:
                 std::memmove(reinterpret_cast<ptr_t>(IT(split_it)->c_va + write_offset), reinterpret_cast<ptr_t>(vmm_data.get()), bytes_1st_page);
 
                 // Write to second page.
-                std::memmove(reinterpret_cast<ptr_t>(IT(split_it)->c_va), reinterpret_cast<ptr_t>(vmm_data.get() + bytes_1st_page + 1), bytes_2nd_page);
+                std::memmove(reinterpret_cast<ptr_t>(IT(second_split_it)->c_va), reinterpret_cast<ptr_t>(vmm_data.get() + bytes_1st_page + 1), bytes_2nd_page);
             }
             else
             {
@@ -823,7 +864,7 @@ private:
     /// @return 1
     ///
     int
-    get_flip_data(int_t out_addr, int_t out_size)
+    get_flip_data(const int_t out_addr, const int_t out_size)
     {
         expects(out_addr != 0);
         expects(out_size != 0);
@@ -844,6 +885,8 @@ private:
     int
     clear_flip_data()
     {
+        bfdebug << "clear_flip_data: clearing flip data" << bfendl;
+
         std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
         g_flip_log.clear();
         return 1;
@@ -857,15 +900,17 @@ private:
     /// @return 1
     ///
     int
-    remove_flip_entry(int_t rip)
+    remove_flip_entry(const int_t rip)
     {
         expects(rip != 0);
+
+        bfdebug << "remove_flip_entry: removing flip entry for: " << hex_out_s(rip) << bfendl;
 
         std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
 
         // Find relevant entry/entries by provided RIP address.
         auto &&vec = g_flip_log; // Shorter name.
-        vec.erase(std::remove_if(vec.begin(), vec.end(), [&rip](const flip_data & o)
+        vec.erase(std::remove_if(vec.begin(), vec.end(), [&rip](const flip_data &o)
         {
             return o.rip == rip;
         }), vec.end());
