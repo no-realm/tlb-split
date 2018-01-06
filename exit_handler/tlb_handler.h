@@ -272,7 +272,7 @@ public:
 
                     if (rip == last_exec_rip)
                     {
-                        last_exec_rip++;
+                        last_exec_count++;
                     }
                     else
                     {
@@ -580,7 +580,7 @@ private:
 
             // We have found the relevant split context.
             //
-            bfwarning << "deactivate_split_pa: deactivating split for: " << hex_out_s(d_pa) << bfendl;
+            bfdebug << "deactivate_split_pa: deactivating split for: " << hex_out_s(d_pa) << bfendl;
             bfdebug << "deactivate_split_pa: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
 
             // Mutex block
