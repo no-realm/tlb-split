@@ -149,9 +149,20 @@ main(int argc, const char *argv[])
                     << "  --help, -h: Display this help message" << std::endl
                     << "  --clear, -c: Clear flip data log" << std::endl
                     << "  --remove, -r <addr>: Remove all entries with give address from flip data log" << std::endl
+                    << "  --deall, -a: Deatcivate all splits " << std::endl
                     << "  <addr>: Given address will be used as module base to normalize the data" << std::endl
                     << std::endl
                     ;
+                exit(0);
+            }
+            else if (cmd == "--deall" || cmd == "-a")
+            {
+                // VMCALL: Deactivate all splits
+                regs.r00 = VMCALL_REGISTERS;
+                regs.r01 = VMCALL_MAGIC_NUMBER;
+                regs.r02 = 4;
+                ctl.call_ioctl_vmcall(&regs, 0);
+                std::cout << "all splits deactivated" << std::endl;
                 exit(0);
             }
             else
