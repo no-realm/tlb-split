@@ -304,9 +304,9 @@ public:
                     last_exec_count = 0;
                     last_read_count = 0;
 
-                    // As mentioned in the warning above, this shouldn't be done here.
-                    //vmx::invvpid_all_contexts();
-                    //vmx::invept_global();
+                    // Force TLB flush
+                    vmx::invvpid_all_contexts();
+                    vmx::invept_global();
                 }
             }
 
