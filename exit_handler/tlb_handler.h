@@ -109,6 +109,7 @@ enum access_t {
 };
 
 extern std::unique_ptr<root_ept_intel_x64> g_root_ept;
+extern std::unique_ptr<root_ept_intel_x64> g_clean_ept;
 std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>> g_splits;
 std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>          g_2m_pages;
 std::vector<flip_data> g_flip_log;
@@ -141,6 +142,24 @@ public:
     ///
     ~tlb_handler() override
     { }
+
+    /// Monitor Trap Callback
+    ///
+    /// When the trap flag is set, and the VM is resumed, a VM exit is
+    /// generated after the next instruction executes, providing a means
+    /// to single step the execution of the VM. When this single step
+    /// occurs, this callback is called.
+    ///
+    void
+    monitor_trap_callback()
+    {
+        // Reset the trap. This ensures that if the hooked function executes
+        // again, we trap again.
+        m_vmcs_eapis->set_eptp(g_root_ept->eptp());
+
+        // Resume the VM
+        m_vmcs_eapis->resume();
+    }
 
     /// Handle Exit
     ///
@@ -212,6 +231,23 @@ public:
                     g_flip_log.emplace_back(rip, gva, IT(split_it)->gva, gpa, d_pa, cr3, flags, 1);
                 }
 
+                // Log entry
+                /* This seems to cause thrashing
+                bfinfo
+                  << bfcolor_func << "["
+                  << ((flags & access_t::read) == access_t::read   ? "R" : "-")
+                  << ((flags & access_t::write) == access_t::write ? "W" : "-")
+                  << ((flags & access_t::exec) == access_t::exec   ? "X" : "-")
+                  << "]:"  << bfcolor_end
+                  << " cr3: " << hex_out_s(cr3, 8)
+                  << " rip: " << hex_out_s(rip, 8)
+                  << " gva: " << hex_out_s(gva, 8)
+                  //<< " gpa: " << hex_out_s(gpa, 8)
+                  //<< " d_pa: " << hex_out_s(d_pa, 8)
+                  //<< " flags: " << hex_out_s(flags, 3)
+                  << bfendl;
+                //*/
+
                 // Check exit qualifications
                 if (access_t::write == (flags & access_t::write))
                 {
@@ -226,7 +262,7 @@ public:
                     {
                         // Switch to data page.
                         std::lock_guard<std::mutex> guard(g_mutex);
-                        bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
+                        //bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                         entry.trap_on_access();
                         entry.set_phys_addr(IT(split_it)->d_pa);
@@ -240,7 +276,7 @@ public:
                     //
 
                     std::lock_guard<std::mutex> guard(g_mutex);
-                    bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
+                    //bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(IT(split_it)->d_pa);
@@ -264,7 +300,7 @@ public:
                     //
 
                     std::lock_guard<std::mutex> guard(g_mutex);
-                    bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
+                    //bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(IT(split_it)->c_pa);
@@ -304,9 +340,13 @@ public:
                     last_exec_count = 0;
                     last_read_count = 0;
 
+                    // Single step through the clean EPT
+                    m_vmcs_eapis->set_eptp(g_clean_ept->eptp());
+                    this->register_monitor_trap(&tlb_handler::monitor_trap_callback);
+
                     // Force TLB flush
-                    vmx::invvpid_all_contexts();
-                    vmx::invept_global();
+                    //vmx::invvpid_all_contexts();
+                    //vmx::invept_global();
                 }
             }
 

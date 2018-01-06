@@ -11,7 +11,10 @@ using namespace vmcs;
 #define MAX_PHYS_ADDR 0x2000000000
 #endif
 
+// g_root_ept: main global EPT
+// g_clean_ept: globsl EPT which is kept clean
 std::unique_ptr<root_ept_intel_x64> g_root_ept;
+std::unique_ptr<root_ept_intel_x64> g_clean_ept;
 
 class vmcs_hook : public vmcs_intel_x64_eapis
 {
@@ -42,10 +45,13 @@ public:
 
         if (!initialized)
         {
+            // Create EPT instance
             g_root_ept = std::make_unique<root_ept_intel_x64>();
+            g_clean_ept = std::make_unique<root_ept_intel_x64>();
 
             // Setup identity map (2m)
             g_root_ept->setup_identity_map_2m(0, MAX_PHYS_ADDR);
+            g_clean_ept->setup_identity_map_2m(0, MAX_PHYS_ADDR);
 
             // Since EPT in the Extended APIs is global, we should only set it
             // up once.
