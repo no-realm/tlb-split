@@ -160,7 +160,7 @@ public:
             const auto &&gva = vmcs::guest_linear_address::get();
             const auto &&gpa = vmcs::guest_physical_address::get();
             const auto &&d_pa = gpa & mask;
-            const auto &&rip = m_state_save->rip;
+            auto &&rip = m_state_save->rip;
 
             // Get violation access flags.
             const int_t flags = 0x000
@@ -432,8 +432,8 @@ private:
             bfdebug << "create_split_context: remapping page from 2m to 4k for: " << hex_out_s(aligned_2m_pa) << bfendl;
 
             std::lock_guard<std::mutex> guard(g_mutex);
-            const auto &&saddr = aligned_2m_pa;
-            const auto &&eaddr = aligned_2m_pa + ept::pd::size_bytes;
+            const auto saddr = aligned_2m_pa;
+            const auto eaddr = aligned_2m_pa + ept::pd::size_bytes;
             g_root_ept->unmap(aligned_2m_pa);
             g_root_ept->setup_identity_map_4k(saddr, eaddr);
             g_2m_pages[aligned_2m_pa] = 0;
@@ -768,8 +768,8 @@ private:
         if (split_it != g_splits.end())
         {
             // Check if we have to write to two consecutive pages.
-            const auto &&start_range = to_va;
-            const auto &&end_range = start_range + size - 1;
+            const auto start_range = to_va;
+            const auto end_range = start_range + size - 1;
             if ((end_range >> 12) > (start_range >> 12))
             {
                 // Get virt and phys address of second page.
