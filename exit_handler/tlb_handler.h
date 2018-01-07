@@ -23,6 +23,7 @@
 #include <vector>
 #include <map>
 #include <mutex>
+#include <bitset>
 
 using namespace intel_x64;
 
@@ -83,11 +84,11 @@ struct flip_data {
     int_t gpa = 0;
     int_t d_pa = 0;
     int_t cr3 = 0;
-    int_t flags = 0;
+    int_t bits = 0;
     int_t counter = 0;
 
     flip_data() = default;
-    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _flags, int_t _counter)
+    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _bits, int_t _counter)
     {
         rip = _rip;
         gva = _gva;
@@ -95,18 +96,19 @@ struct flip_data {
         gpa = _gpa;
         d_pa = _d_pa;
         cr3 = _cr3;
-        flags = _flags;
+        bits = _bits;
         counter = _counter;
     }
 
     ~flip_data() = default;
 };
 
-enum access_t {
-    read = 0x001,
-    write = 0x010,
-    exec = 0x100,
-};
+namespace access_t
+{
+    constexpr const auto read = 0;
+    constexpr const auto write = 1;
+    constexpr const auto exec = 2;
+}
 
 extern std::unique_ptr<root_ept_intel_x64> g_root_ept;
 extern std::unique_ptr<root_ept_intel_x64> g_clean_ept;
@@ -173,27 +175,22 @@ public:
             //          specifically states not to invalidate as the hardware is
             //          doing this for you.
 
-            // Get cr3, mask, gva, gpa, d_pa and rip
+            // Get cr3, mask, gva, gpa, d_pa, rip and vcpuid
             const auto &&cr3 = vmcs::guest_cr3::get();
             const auto &&mask = ~(ept::pt::size_bytes - 1);
             const auto &&gva = vmcs::guest_linear_address::get();
             const auto &&gpa = vmcs::guest_physical_address::get();
             const auto &&d_pa = gpa & mask;
             auto &&rip = m_state_save->rip;
-            auto &&vcpuid = m_state_save->vcpuid;
+            //auto &&vcpuid = m_state_save->vcpuid;
 
-            constexpr const auto access_mask = 0x0000000000000007UL;
-            const auto &&violation_bits = vmcs::exit_qualification::ept_violation::get();
-            const auto &&access_bits = get_bits(violation_bits, access_mask);
-
-            bfdebug << "access bits: " << hex_out_s(access_bits, 3) << bfendl;
-
-            // Get violation access flags.
-            const int_t flags = 0x000
-                | (vmcs::exit_qualification::ept_violation::data_read::is_enabled()         ? access_t::read    : 0x000)
-                | (vmcs::exit_qualification::ept_violation::data_write::is_enabled()        ? access_t::write   : 0x000)
-                | (vmcs::exit_qualification::ept_violation::instruction_fetch::is_enabled() ? access_t::exec    : 0x000)
-                ;
+            // Get the violation access bits directly from the bit structure
+            // access_bits == (hex) 0x1 -> EXECUTE  -> (bin) 001
+            // access_bits == (hex) 0x2 -> WRITE    -> (bin) 010
+            // access_bits == (hex) 0x4 -> READ     -> (bin) 100
+            //
+            const auto &&access_bits = get_bits(vmcs::exit_qualification::ept_violation::get(), 0x0000000000000007UL);
+            //bfdebug << "violation access bits: " << hex_out_s(access_bits, 3) << bfendl;
 
             // Search for relevant entry in <map> m_splits.
             const auto &&split_it = g_splits.find(d_pa);
@@ -207,7 +204,7 @@ public:
                   << " gpa: " << hex_out_s(gpa)
                   << " d_pa: " << hex_out_s(d_pa)
                   << " cr3: " << hex_out_s(cr3, 8)
-                  << " flags: " << hex_out_s(flags, 3)
+                  << " bits: " << std::bitset<3>(access_bits)
                   << bfendl;
 
                 std::lock_guard<std::mutex> guard(g_mutex);
@@ -217,9 +214,9 @@ public:
             else
             {
                 // Check for known RIPs.
-                auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &flags](const flip_data & m) -> bool
+                auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &access_bits](const flip_data & m) -> bool
                 {
-                    return (m.rip == rip && m.flags == flags);
+                    return (m.rip == rip && m.bits == access_bits);
                 });
 
                 if (flip_it != g_flip_log.end())
@@ -235,28 +232,26 @@ public:
                 {
                     // Add violation data to the flip log.
                     std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
-                    g_flip_log.emplace_back(rip, gva, IT(split_it)->gva, gpa, d_pa, cr3, flags, 1);
+                    g_flip_log.emplace_back(rip, gva, IT(split_it)->gva, gpa, d_pa, cr3, access_bits, 1);
                 }
 
                 // Log entry
                 /* This seems to cause thrashing
                 bfinfo
                   << bfcolor_func << "["
-                  << ((flags & access_t::read) == access_t::read   ? "R" : "-")
-                  << ((flags & access_t::write) == access_t::write ? "W" : "-")
-                  << ((flags & access_t::exec) == access_t::exec   ? "X" : "-")
+                  << std::bitset<3>(access_bits)
                   << "]:"  << bfcolor_end
                   << " cr3: " << hex_out_s(cr3, 8)
-                  << " rip: " << hex_out_s(rip, 8)
-                  << " gva: " << hex_out_s(gva, 8)
-                  //<< " gpa: " << hex_out_s(gpa, 8)
-                  //<< " d_pa: " << hex_out_s(d_pa, 8)
-                  //<< " flags: " << hex_out_s(flags, 3)
+                  << " rip: " << hex_out_s(rip)
+                  << " gva: " << hex_out_s(gva)
+                  //<< " gpa: " << hex_out_s(gpa)
+                  //<< " d_pa: " << hex_out_s(d_pa)
+                  //<< " bits: " << std::bitset<3>(access_bits)
                   << bfendl;
                 //*/
 
                 // Check exit qualifications
-                if (access_t::write == (flags & access_t::write))
+                if (is_bit_set(access_bits, access_t::write))
                 {
                     if (IT(split_it)->cr3 != cr3)
                     {
@@ -269,7 +264,7 @@ public:
                     {
                         // Switch to data page.
                         std::lock_guard<std::mutex> guard(g_mutex);
-                        //bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
+                        //bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
                         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                         entry.trap_on_access();
                         entry.set_phys_addr(IT(split_it)->d_pa);
@@ -277,13 +272,13 @@ public:
                         entry.set_write_access(true);
                     }
                 }
-                else if (access_t::read == (flags & access_t::read))
+                else if (is_bit_set(access_bits, access_t::read))
                 {
                     // READ violation. Flip to data page.
                     //
 
                     std::lock_guard<std::mutex> guard(g_mutex);
-                    //bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
+                    //bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(IT(split_it)->d_pa);
@@ -301,13 +296,13 @@ public:
                     }
 
                 }
-                else if(access_t::exec == (flags & access_t::exec))
+                else if(is_bit_set(access_bits, access_t::exec))
                 {
                     // EXEC violation. Flip to code page.
                     //
 
                     std::lock_guard<std::mutex> guard(g_mutex);
-                    //bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip, 8) << '/' << hex_out_s(gva, 8) << bfendl;
+                    //bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(IT(split_it)->c_pa);
@@ -332,7 +327,7 @@ public:
                       << " gpa: " << hex_out_s(gpa)
                       << " d_pa: " << hex_out_s(d_pa)
                       << " cr3: " << hex_out_s(cr3, 8)
-                      << " flags: " << hex_out_s(flags, 3)
+                      << " bits: " << std::bitset<3>(access_bits)
                       << bfendl;
                 }
 
