@@ -180,6 +180,13 @@ public:
             const auto &&gpa = vmcs::guest_physical_address::get();
             const auto &&d_pa = gpa & mask;
             auto &&rip = m_state_save->rip;
+            auto &&vcpuid = m_state_save->vcpuid;
+
+            constexpr const auto access_mask = 0x0000000000000007UL;
+            const auto &&violation_bits = vmcs::exit_qualification::ept_violation::get();
+            const auto &&access_bits = get_bits(violation_bits, access_mask);
+
+            bfdebug << "access bits: " << hex_out_s(access_bits, 3) << bfendl;
 
             // Get violation access flags.
             const int_t flags = 0x000
