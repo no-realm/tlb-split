@@ -45,3 +45,9 @@ makefiles/src_tlb_split/app/bin/native/hook.exe
 make stop
 make driver_unload
 ```
+
+For more information about the monitor application use the `--help` option.
+
+```bash
+makefiles/src_tlb_split/app/bin/native/hook.exe --help
+```
