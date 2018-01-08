@@ -27,8 +27,11 @@
 
 using namespace intel_x64;
 
+// Type aliases
 using ptr_t = void*;
 using int_t = uintptr_t;
+using split_map_t = std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>>;
+using page_map_t = std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>;
 
 namespace detail
 {
@@ -110,14 +113,22 @@ namespace access_t
     constexpr const auto exec = 2;
 }
 
+// EPTs
 extern std::unique_ptr<root_ept_intel_x64> g_root_ept;
 extern std::unique_ptr<root_ept_intel_x64> g_clean_ept;
-std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>> g_splits;
-std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>          g_2m_pages;
+
+// Global maps for splits and 2m pages
+split_map_t g_splits;
+page_map_t g_2m_pages;
+
+// Vector holding all the registered flip data
 std::vector<flip_data> g_flip_log;
+
+// Mutexes
 static std::mutex g_mutex;
 static std::mutex g_flip_mutex;
 
+// Macros for easier access
 #define CONTEXT(_d_pa) g_splits[_d_pa]
 #define IT(_split_it) _split_it->second
 
@@ -164,7 +175,7 @@ public:
     /// Flip to data page for read/write access
     ///
     void
-    flip_data_page(const std::map<int_t, std::unique_ptr<split_context>>::const_iterator &split_it, const int_t &d_pa)
+    flip_data_page(const split_map_t::const_iterator &split_it, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
@@ -177,7 +188,7 @@ public:
     /// Flip to code page for execute access
     ///
     void
-    flip_code_page(const std::map<int_t, std::unique_ptr<split_context>>::const_iterator &split_it, const int_t &d_pa)
+    flip_code_page(const split_map_t::const_iterator &split_it, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
