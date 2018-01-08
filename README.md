@@ -14,7 +14,7 @@ please see the following documentation.
 This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), as well as the [Extended APIs](https://github.com/Bareflank/extended_apis) module.
 The instructions below are for Windows and should be executed from inside Cygwin64.
 
-```
+```bash
 cd ~/
 git clone https://github.com/Bareflank/hypervisor.git
 cd hypervisor
@@ -33,10 +33,10 @@ cd build
 make
 ```
 
-To run this example, we need to first load the hypervisor, and then run the
-example app that will get hooked by the hypervisor.
+To run the monitor application, we need to first load the hypervisor and then
+run the monitor app that will output information about page flips.
 
-```
+```bash
 make driver_load
 make quick
 
