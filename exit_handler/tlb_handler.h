@@ -124,18 +124,15 @@ static std::mutex g_flip_mutex;
 class tlb_handler : public exit_handler_intel_x64_eapis
 {
 private:
-    int_t last_exec_rip, last_read_rip;
-    int last_exec_count,last_read_count;
+    int_t prev_rip, rip_count;
 
 public:
 
     /// Default Constructor
     ///
     tlb_handler ()
-        : last_exec_rip(0)
-        , last_read_rip(0)
-        , last_exec_count(0)
-        , last_read_count(0)
+        : prev_rip(0)
+        , rip_count(0)
     {
         bfinfo << "tlb_handler instance initialized" << bfendl;
     }
@@ -155,12 +152,38 @@ public:
     void
     monitor_trap_callback()
     {
-        // Reset the trap. This ensures that if the hooked function executes
-        // again, we trap again.
+        bfwarning << "Resetting the trap" << bfendl;
+
+        // Reset the trap.
         m_vmcs_eapis->set_eptp(g_root_ept->eptp());
 
         // Resume the VM
         m_vmcs_eapis->resume();
+    }
+
+    /// Flip to data page for read/write access
+    ///
+    void
+    flip_data_page(const std::map<int_t, std::unique_ptr<split_context>>::const_iterator &split_it, const int_t &d_pa)
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        auto &&entry = g_root_ept->gpa_to_epte(d_pa);
+        entry.trap_on_access();
+        entry.set_phys_addr(IT(split_it)->d_pa);
+        entry.set_read_access(true);
+        entry.set_write_access(true);
+    }
+
+    /// Flip to code page for execute access
+    ///
+    void
+    flip_code_page(const std::map<int_t, std::unique_ptr<split_context>>::const_iterator &split_it, const int_t &d_pa)
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        auto &&entry = g_root_ept->gpa_to_epte(d_pa);
+        entry.trap_on_access();
+        entry.set_phys_addr(IT(split_it)->c_pa);
+        entry.set_execute_access(true);
     }
 
     /// Handle Exit
@@ -250,6 +273,31 @@ public:
                   << bfendl;
                 //*/
 
+                // Compare the previous violation RIP to the current one and
+                // increase the counter, if they are the same.
+                // Else, just assign the current RIP to prev_rip and reset the
+                // counter.
+                if (rip == prev_rip)
+                    rip_count++;
+                else {
+                    prev_rip = rip;
+                    rip_count = 0;
+                }
+
+                // Check for TLB thrashing
+                if (rip_count > 2)
+                {
+                    bfinfo << bfcolor_warning << "Thrashing detected at " << bfcolor_end << "rip: " << hex_out_s(prev_rip) << bfendl;
+
+                    // Reset prev_rip and rip_count
+                    prev_rip = 0;
+                    rip_count = 0;
+
+                    // Single-step through the clean EPT
+                    m_vmcs_eapis->set_eptp(g_clean_ept->eptp());
+                    this->register_monitor_trap(&tlb_handler::monitor_trap_callback);
+                }
+
                 // Check exit qualifications
                 if (is_bit_set(access_bits, access_t::write))
                 {
@@ -263,60 +311,50 @@ public:
                     else
                     {
                         // Switch to data page.
-                        std::lock_guard<std::mutex> guard(g_mutex);
                         //bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                        flip_data_page(split_it, d_pa);
+
+                        /*
+                        std::lock_guard<std::mutex> guard(g_mutex);
                         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                         entry.trap_on_access();
                         entry.set_phys_addr(IT(split_it)->d_pa);
                         entry.set_read_access(true);
                         entry.set_write_access(true);
+                        */
+
                     }
                 }
                 else if (is_bit_set(access_bits, access_t::read))
                 {
                     // READ violation. Flip to data page.
                     //
-
-                    std::lock_guard<std::mutex> guard(g_mutex);
                     //bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                    flip_data_page(split_it, d_pa);
+
+                    /*
+                    std::lock_guard<std::mutex> guard(g_mutex);
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(IT(split_it)->d_pa);
                     entry.set_read_access(true);
                     entry.set_write_access(true);
-
-                    if (rip == last_read_rip)
-                    {
-                        last_read_count++;
-                    }
-                    else
-                    {
-                        last_read_rip = rip;
-                        last_read_count = 0;
-                    }
-
+                    //*/
                 }
                 else if(is_bit_set(access_bits, access_t::exec))
                 {
                     // EXEC violation. Flip to code page.
                     //
-
-                    std::lock_guard<std::mutex> guard(g_mutex);
                     //bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                    flip_code_page(split_it, d_pa);
+
+                    /*
+                    std::lock_guard<std::mutex> guard(g_mutex);
                     auto &&entry = g_root_ept->gpa_to_epte(d_pa);
                     entry.trap_on_access();
                     entry.set_phys_addr(IT(split_it)->c_pa);
                     entry.set_execute_access(true);
-
-                    if (rip == last_exec_rip)
-                    {
-                        last_exec_count++;
-                    }
-                    else
-                    {
-                        last_exec_rip = rip;
-                        last_exec_count = 0;
-                    }
+                    //*/
                 }
                 else
                 {
@@ -329,26 +367,6 @@ public:
                       << " cr3: " << hex_out_s(cr3, 8)
                       << " bits: " << std::bitset<3>(access_bits)
                       << bfendl;
-                }
-
-                // Check for TLB thrashing
-                if ((last_exec_rip == last_read_rip) && ((last_exec_count + last_read_count) >= 4))
-                {
-                    bfinfo << bfcolor_warning << "Thrashing detected at " << bfcolor_end << "rip: " << hex_out_s(last_exec_rip) << bfendl;
-
-                    // Reset
-                    last_exec_rip = 0;
-                    last_read_rip = 0;
-                    last_exec_count = 0;
-                    last_read_count = 0;
-
-                    // Single step through the clean EPT
-                    m_vmcs_eapis->set_eptp(g_clean_ept->eptp());
-                    this->register_monitor_trap(&tlb_handler::monitor_trap_callback);
-
-                    // Force TLB flush
-                    //vmx::invvpid_all_contexts();
-                    //vmx::invept_global();
                 }
             }
 
