@@ -1,5 +1,6 @@
 #include <ioctl.h>
 #include <guard_exceptions.h>
+#include <bitmanip.h>
 
 #include <iostream>
 #include <iomanip>
@@ -9,6 +10,7 @@
 #include <string>
 #include <algorithm>
 #include <limits.h>
+#include <bitset>
 
 using int_t = uintptr_t;
 using ptr_t = void*;
@@ -20,11 +22,11 @@ struct flip_data {
     int_t gpa = 0;
     int_t d_pa = 0;
     int_t cr3 = 0;
-    int_t flags = 0;
+    int_t bits = 0;
     int_t counter = 0;
 
     flip_data() = default;
-    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _flags, int_t _counter)
+    flip_data(int_t _rip, int_t _gva, int_t _orig_gva, int_t _gpa, int_t _d_pa, int_t _cr3, int_t _bits, int_t _counter)
     {
         rip = _rip;
         gva = _gva;
@@ -32,18 +34,19 @@ struct flip_data {
         gpa = _gpa;
         d_pa = _d_pa;
         cr3 = _cr3;
-        flags = _flags;
+        bits = _bits;
         counter = _counter;
     }
 
     ~flip_data() = default;
 };
 
-enum access_t {
-    read = 0x001,
-    write = 0x010,
-    exec = 0x100,
-};
+namespace access_t
+{
+    constexpr const auto read = 0;
+    constexpr const auto write = 1;
+    constexpr const auto exec = 2;
+}
 
 std::vector<flip_data> g_flip_log;
 
@@ -149,9 +152,20 @@ main(int argc, const char *argv[])
                     << "  --help, -h: Display this help message" << std::endl
                     << "  --clear, -c: Clear flip data log" << std::endl
                     << "  --remove, -r <addr>: Remove all entries with give address from flip data log" << std::endl
+                    << "  --deall, -a: Deatcivate all splits " << std::endl
                     << "  <addr>: Given address will be used as module base to normalize the data" << std::endl
                     << std::endl
                     ;
+                exit(0);
+            }
+            else if (cmd == "--deall" || cmd == "-a")
+            {
+                // VMCALL: Deactivate all splits
+                regs.r00 = VMCALL_REGISTERS;
+                regs.r01 = VMCALL_MAGIC_NUMBER;
+                regs.r02 = 4;
+                ctl.call_ioctl_vmcall(&regs, 0);
+                std::cout << "all splits deactivated" << std::endl;
                 exit(0);
             }
             else
@@ -189,7 +203,7 @@ main(int argc, const char *argv[])
         regs.r01 = VMCALL_MAGIC_NUMBER;
         regs.r02 = 0;
         ctl.call_ioctl_vmcall(&regs, 0);
-        //std::cout << "hv_present: " << (regs.r02 == 1 ? "yes" : "no") << std::endl;
+        std::cout << "hv_present: " << (regs.r02 == 1 ? "yes" : "no") << std::endl;
 
         /*
         // VMCALL: Check if page is split.
@@ -292,14 +306,14 @@ main(int argc, const char *argv[])
         for (const auto & flip : local_flip_log)
         {
             // Filter out execute only flips.
-            if ((flip.flags & access_t::exec) == access_t::exec && (((flip.flags & access_t::read) == 0) || ((flip.flags & access_t::write) == 0)))
+            if (is_bit_set(flip.bits, access_t::exec))
                 continue;
 
             std::cout
               << "["
-              << ((flip.flags & access_t::read) == access_t::read   ? "R" : "-")
-              << ((flip.flags & access_t::write) == access_t::write ? "W" : "-")
-              << ((flip.flags & access_t::exec) == access_t::exec   ? "X" : "-")
+              << (is_bit_set(flip.bits, access_t::read)     ? "R" : "-")
+              << (is_bit_set(flip.bits, access_t::write)    ? "W" : "-")
+              << (is_bit_set(flip.bits, access_t::exec)     ? "X" : "-")
               << "]:"
               << " rip: " << hex_out_s(transl(flip.rip, module_base))
               << " gva: " << hex_out_s(transl(flip.gva, module_base))
@@ -308,7 +322,7 @@ main(int argc, const char *argv[])
               //<< " d_pa: " << hex_out_s(flip.d_pa)
               << " cr3: " << hex_out_s(flip.cr3, 8)
               << " counter: " << flip.counter
-              //<< " flags: " << hex_out_s(flip.flags, 3)
+              //<< " bits: " << std::bitset<3>(access_bits)
               << std::endl;
         }
 
