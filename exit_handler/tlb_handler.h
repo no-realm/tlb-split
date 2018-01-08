@@ -175,12 +175,12 @@ public:
     /// Flip to data page for read/write access
     ///
     void
-    flip_data_page(const split_map_t::const_iterator &split_it, const int_t &d_pa)
+    flip_data_page(const int_t &phys_addr, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
         entry.trap_on_access();
-        entry.set_phys_addr(IT(split_it)->d_pa);
+        entry.set_phys_addr(phys_addr);
         entry.set_read_access(true);
         entry.set_write_access(true);
     }
@@ -188,12 +188,12 @@ public:
     /// Flip to code page for execute access
     ///
     void
-    flip_code_page(const split_map_t::const_iterator &split_it, const int_t &d_pa)
+    flip_code_page(const int_t &phys_addr, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
         entry.trap_on_access();
-        entry.set_phys_addr(IT(split_it)->c_pa);
+        entry.set_phys_addr(phys_addr);
         entry.set_execute_access(true);
     }
 
@@ -323,7 +323,7 @@ public:
                     {
                         // Switch to data page.
                         //bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
-                        flip_data_page(split_it, d_pa);
+                        flip_data_page(IT(split_it)->d_pa, d_pa);
 
                         /*
                         std::lock_guard<std::mutex> guard(g_mutex);
@@ -341,7 +341,7 @@ public:
                     // READ violation. Flip to data page.
                     //
                     //bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
-                    flip_data_page(split_it, d_pa);
+                    flip_data_page(IT(split_it)->d_pa, d_pa);
 
                     /*
                     std::lock_guard<std::mutex> guard(g_mutex);
@@ -357,7 +357,7 @@ public:
                     // EXEC violation. Flip to code page.
                     //
                     //bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
-                    flip_code_page(split_it, d_pa);
+                    flip_code_page(IT(split_it)->c_pa, d_pa);
 
                     /*
                     std::lock_guard<std::mutex> guard(g_mutex);
