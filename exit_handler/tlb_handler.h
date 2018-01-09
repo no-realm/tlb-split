@@ -134,9 +134,9 @@ static std::mutex g_flip_mutex;
 
 // Macro debug switch
 constexpr const auto debug_disabled = true;
-#define _bfdebug \
-    if (debug_disabled) {} \
-    else std::cerr
+#define _bfdebug            \
+    if (debug_disabled) {}  \
+    else bfdebug
 
 class tlb_handler : public exit_handler_intel_x64_eapis
 {
