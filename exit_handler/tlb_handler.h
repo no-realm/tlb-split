@@ -179,10 +179,11 @@ public:
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-        entry.trap_on_access();
-        entry.set_phys_addr(phys_addr);
+        //entry.trap_on_access();
+        entry.set_execute_access(false);
         entry.set_read_access(true);
         entry.set_write_access(true);
+        entry.set_phys_addr(phys_addr);
     }
 
     /// Flip to code page for execute access
@@ -192,8 +193,10 @@ public:
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-        entry.trap_on_access();
+        //entry.trap_on_access();
         entry.set_phys_addr(phys_addr);
+        entry.set_read_access(false);
+        entry.set_write_access(false);
         entry.set_execute_access(true);
     }
 
