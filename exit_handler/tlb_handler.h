@@ -132,6 +132,12 @@ static std::mutex g_flip_mutex;
 #define CONTEXT(_d_pa) g_splits[_d_pa]
 #define IT(_split_it) _split_it->second
 
+// Macro debug switch
+constexpr const auto debug_disabled = true;
+#define _bfdebug \
+    if (debug_disabled) {} \
+    else std::cerr
+
 class tlb_handler : public exit_handler_intel_x64_eapis
 {
 private:
@@ -145,7 +151,7 @@ public:
         : prev_rip(0)
         , rip_count(0)
     {
-        bfinfo << "tlb_handler instance initialized" << bfendl;
+        _bfdebug << "tlb_handler instance initialized" << bfendl;
     }
 
     /// Destructor
@@ -503,7 +509,7 @@ private:
         {
             // This (2m) page range has to be remapped to 4k.
             //
-            bfdebug << "create_split_context: remapping page from 2m to 4k for: " << hex_out_s(aligned_2m_pa) << bfendl;
+            _bfdebug << "create_split_context: remapping page from 2m to 4k for: " << hex_out_s(aligned_2m_pa) << bfendl;
 
             std::lock_guard<std::mutex> guard(g_mutex);
             const auto saddr = aligned_2m_pa;
@@ -517,7 +523,7 @@ private:
             vmx::invept_global();
         }
         else
-            bfdebug << "create_split_context: page already remapped: " << hex_out_s(aligned_2m_pa) << bfendl;
+            _bfdebug << "create_split_context: page already remapped: " << hex_out_s(aligned_2m_pa) << bfendl;
 
         // Check if we have already split the relevant **4k** page.
         const auto &&split_it = g_splits.find(d_pa);
@@ -525,7 +531,7 @@ private:
         {
             // We haven't split this page yet, so do it now.
             //
-            bfdebug << "create_split_context: splitting page for: " << hex_out_s(d_pa) << bfendl;
+            _bfdebug << "create_split_context: splitting page for: " << hex_out_s(d_pa) << bfendl;
 
             // Create and assign unqiue split_context.
             std::lock_guard<std::mutex> guard(g_mutex);
@@ -550,16 +556,16 @@ private:
             CONTEXT(d_pa)->active = false;
             CONTEXT(d_pa)->num_hooks = 1;
             g_2m_pages[aligned_2m_pa]++;
-            bfdebug << "create_split_context: splits in this (2m) range: " << g_2m_pages[aligned_2m_pa] << bfendl;
-            bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
+            _bfdebug << "create_split_context: splits in this (2m) range: " << g_2m_pages[aligned_2m_pa] << bfendl;
+            _bfdebug << "create_split_context: # of hooks on this page: " << CONTEXT(d_pa)->num_hooks << bfendl;
         }
         else
         {
             // This page already got split. Just increase the hook counter.
-            bfdebug << "create_split_context: page already split for: " << hex_out_s(d_pa) << bfendl;
+            _bfdebug << "create_split_context: page already split for: " << hex_out_s(d_pa) << bfendl;
             std::lock_guard<std::mutex> guard(g_mutex);
             IT(split_it)->num_hooks++;
-            bfdebug << "create_split_context: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
+            _bfdebug << "create_split_context: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
         }
 
         return 1;
@@ -592,13 +598,13 @@ private:
             {
                 // This split is already active, so don't do anything.
                 //
-                bfdebug << "activate_split: split already active for: " << hex_out_s(d_pa) << bfendl;
+                _bfdebug << "activate_split: split already active for: " << hex_out_s(d_pa) << bfendl;
                 return 1;
             }
 
             // We have found the relevant split context.
             //
-            bfdebug << "activate_split: activating split for: " << hex_out_s(d_pa) << bfendl;
+            _bfdebug << "activate_split: activating split for: " << hex_out_s(d_pa) << bfendl;
 
             // We assign the code page here, since that's the most
             // likely one to get used next.
@@ -644,8 +650,8 @@ private:
                 // We still have other hooks on this page,
                 // so don't deactive the split yet.
                 // Just decrease the hook counter.
-                bfdebug << "deactivate_split_pa: other hooks found on this page: " << hex_out_s(d_pa) << bfendl;
-                bfdebug << "deactivate_split_pa: # of hooks on this page (before): " << IT(split_it)->num_hooks << bfendl;
+                _bfdebug << "deactivate_split_pa: other hooks found on this page: " << hex_out_s(d_pa) << bfendl;
+                _bfdebug << "deactivate_split_pa: # of hooks on this page (before): " << IT(split_it)->num_hooks << bfendl;
 
                 std::lock_guard<std::mutex> guard(g_mutex);
                 IT(split_it)->num_hooks--;
@@ -654,8 +660,8 @@ private:
 
             // We have found the relevant split context.
             //
-            bfdebug << "deactivate_split_pa: deactivating split for: " << hex_out_s(d_pa) << bfendl;
-            bfdebug << "deactivate_split_pa: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
+            _bfdebug << "deactivate_split_pa: deactivating split for: " << hex_out_s(d_pa) << bfendl;
+            _bfdebug << "deactivate_split_pa: # of hooks on this page: " << IT(split_it)->num_hooks << bfendl;
 
             // Mutex block
             {
@@ -667,7 +673,7 @@ private:
 
                 // Erase split context from <map> m_splits.
                 g_splits.erase(d_pa);
-                bfdebug << "deactivate_split_pa: total num of splits: " << g_splits.size() << bfendl;
+                _bfdebug << "deactivate_split_pa: total num of splits: " << g_splits.size() << bfendl;
             }
 
             // Invalidate/Flush TLB
@@ -686,7 +692,7 @@ private:
                     // to a code page while exceeding the page bounds.
                     // Since this split isn't needed anymore, deactivate
                     // it too.
-                    bfdebug << "deactivate_split_pa: deactivating adjacent split for: " << hex_out_s(IT(next_split_it)->d_pa) << bfendl;
+                    _bfdebug << "deactivate_split_pa: deactivating adjacent split for: " << hex_out_s(IT(next_split_it)->d_pa) << bfendl;
                     deactivate_split(IT(next_split_it)->d_va);
                 }
             }
@@ -695,14 +701,14 @@ private:
             const auto &&mask_2m = ~(ept::pd::size_bytes - 1);
             const auto &&aligned_2m_pa = d_pa & mask_2m;
             g_2m_pages[aligned_2m_pa]--;
-            bfdebug << "deactivate_split_pa: splits in this (2m) range: " << g_2m_pages[aligned_2m_pa] << bfendl;
+            _bfdebug << "deactivate_split_pa: splits in this (2m) range: " << g_2m_pages[aligned_2m_pa] << bfendl;
             /*
             // Check whether we have to remap the 4k pages to a 2m page.
             if (g_2m_pages[aligned_2m_pa] == 0)
             {
                 // We need to remap the relevant 4k pages to a 2m page.
                 //
-                bfdebug << "deactivate_split: remapping pages from 4k to 2m for: " << hex_out_s(aligned_2m_pa) << bfendl;
+                _bfdebug << "deactivate_split: remapping pages from 4k to 2m for: " << hex_out_s(aligned_2m_pa) << bfendl;
 
                 auto &&saddr = aligned_2m_pa;
                 auto &&eaddr = aligned_2m_pa + ept::pd::size_bytes;
@@ -717,7 +723,7 @@ private:
                 g_2m_pages.erase(aligned_2m_pa);
             }
             //*/
-            bfdebug << "deactivate_split_pa: total num of remapped (2m) pages: " << g_2m_pages.size() << bfendl;
+            _bfdebug << "deactivate_split_pa: total num of remapped (2m) pages: " << g_2m_pages.size() << bfendl;
 
             return 1;
         }
@@ -755,21 +761,21 @@ private:
     {
         if (g_splits.size() > 0)
         {
-            bfdebug << "deactivate_all_splits: deactivating all splits. current num of splits: " << g_splits.size() << bfendl;
+            _bfdebug << "deactivate_all_splits: deactivating all splits. current num of splits: " << g_splits.size() << bfendl;
 
             // Iterating thorugh <map> g_splits until it is empty.
             while (!g_splits.empty())
             {
                 // Get the first split in the map.
                 const auto &&split_it = g_splits.begin();
-                bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(IT(split_it)->d_pa) << bfendl;
+                _bfdebug << "deactivate_all_splits: deactivating split for: " << hex_out_s(IT(split_it)->d_pa) << bfendl;
 
                 // Deactivating the split for a physical page address.
                 deactivate_split_pa(IT(split_it)->d_pa);
             }
         }
         else
-            bfdebug << "deactivate_all_splits: no active splits found" << bfendl;
+            _bfdebug << "deactivate_all_splits: no active splits found" << bfendl;
 
         return 1;
     }
@@ -829,7 +835,7 @@ private:
         expects(size >= 1);
 
         // Logging params
-        bfdebug << "write_to_c_page: from_va: " << hex_out_s(from_va) << ", to_va: " << hex_out_s(to_va)<< ", size: " << hex_out_s(size) << bfendl;
+        _bfdebug << "write_to_c_page: from_va: " << hex_out_s(from_va) << ", to_va: " << hex_out_s(to_va)<< ", size: " << hex_out_s(size) << bfendl;
 
         // Get the physical aligned (4k) data page address.
         const auto &&cr3 = vmcs::guest_cr3::get();
@@ -850,14 +856,14 @@ private:
                 auto &&end_va = end_range & mask_4k;
                 auto &&end_pa = bfn::virt_to_phys_with_cr3(d_va, cr3);
 
-                bfdebug << "write_to_c_page: we are writing to two pages: " << hex_out_s(d_pa) << " & " << hex_out_s(end_pa) << bfendl;
+                _bfdebug << "write_to_c_page: we are writing to two pages: " << hex_out_s(d_pa) << " & " << hex_out_s(end_pa) << bfendl;
 
                 // Check if the second page is already split
                 if (is_split(end_va) == 0)
                 {
                     // We have to split this page before writing to it.
                     //
-                    bfdebug << "write_to_c_page: splitting second page: " << hex_out_s(end_pa) << bfendl;
+                    _bfdebug << "write_to_c_page: splitting second page: " << hex_out_s(end_pa) << bfendl;
 
                     create_split_context(end_va);
                     activate_split(end_va);
@@ -899,7 +905,7 @@ private:
             }
             else
             {
-                bfdebug << "write_to_c_page: we are writing to one page: " << hex_out_s(d_pa) << bfendl;
+                _bfdebug << "write_to_c_page: we are writing to one page: " << hex_out_s(d_pa) << bfendl;
 
                 // Get write offset
                 auto &&write_offset = to_va - d_va;
@@ -959,7 +965,7 @@ private:
     int
     clear_flip_data()
     {
-        bfdebug << "clear_flip_data: clearing flip data" << bfendl;
+        _bfdebug << "clear_flip_data: clearing flip data" << bfendl;
 
         std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
         g_flip_log.clear();
@@ -978,7 +984,7 @@ private:
     {
         expects(rip != 0);
 
-        bfdebug << "remove_flip_entry: removing flip entry for: " << hex_out_s(rip) << bfendl;
+        _bfdebug << "remove_flip_entry: removing flip entry for: " << hex_out_s(rip) << bfendl;
 
         std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
 
