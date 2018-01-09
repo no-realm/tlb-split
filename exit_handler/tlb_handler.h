@@ -4,6 +4,7 @@
 #include <memory_manager/map_ptr_x64.h>
 #include <vmcs/root_ept_intel_x64.h>
 #include <vmcs/ept_entry_intel_x64.h>
+//#include <vmcs/ept_entry_ext_intel_x64.h>
 #include <vmcs/vmcs_intel_x64_eapis.h>
 #include <vmcs/vmcs_intel_x64_16bit_control_fields.h>
 #include <vmcs/vmcs_intel_x64_32bit_read_only_data_fields.h>
@@ -30,8 +31,6 @@ using namespace intel_x64;
 // Type aliases
 using ptr_t = void*;
 using int_t = uintptr_t;
-using split_map_t = std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>>;
-using page_map_t = std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>;
 
 namespace detail
 {
@@ -118,6 +117,8 @@ extern std::unique_ptr<root_ept_intel_x64> g_root_ept;
 extern std::unique_ptr<root_ept_intel_x64> g_clean_ept;
 
 // Global maps for splits and 2m pages
+using split_map_t   = std::map<int_t  /*d_pa*/,         std::unique_ptr<split_context>>;
+using page_map_t    = std::map<int_t /*aligned_2m_pa*/, size_t /*num_splits*/>;
 split_map_t g_splits;
 page_map_t g_2m_pages;
 
@@ -132,7 +133,8 @@ static std::mutex g_flip_mutex;
 #define CONTEXT(_d_pa) g_splits[_d_pa]
 #define IT(_split_it) _split_it->second
 
-// Macro debug switch
+// Debug/Logging switches
+constexpr const auto flip_logging_enabled = true;
 constexpr const auto debug_disabled = true;
 #define _bfdebug            \
     if (debug_disabled) {}  \
@@ -184,12 +186,17 @@ public:
     flip_data_page(const int_t &phys_addr, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
-        auto &&entry = g_root_ept->gpa_to_epte(d_pa);
+        auto &&entry = /*reinterpret_cast<ept_entry_ext_intel_x64>(*/g_root_ept->gpa_to_epte(d_pa)/*)*/;
+        //auto *m_epte = entry.epte();
+        entry.set_phys_addr(phys_addr);
+
+        // Set RW access
+        //*m_epte = set_bits(*m_epte, 0x7UL, 0x6UL);
+
         //entry.trap_on_access();
         entry.set_execute_access(false);
         entry.set_read_access(true);
         entry.set_write_access(true);
-        entry.set_phys_addr(phys_addr);
     }
 
     /// Flip to code page for execute access
@@ -198,9 +205,14 @@ public:
     flip_code_page(const int_t &phys_addr, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
-        auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-        //entry.trap_on_access();
+        auto &&entry = /*reinterpret_cast<ept_entry_ext_intel_x64>(*/g_root_ept->gpa_to_epte(d_pa)/*)*/;
+        //auto *m_epte = entry.epte();
         entry.set_phys_addr(phys_addr);
+
+        // Set EXEC access
+        //*m_epte = set_bits(*m_epte, 0x7UL, 0x1UL);
+
+        //entry.trap_on_access();
         entry.set_read_access(false);
         entry.set_write_access(false);
         entry.set_execute_access(true);
@@ -256,41 +268,48 @@ public:
             }
             else
             {
-                // Check for known RIPs.
-                auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &access_bits](const flip_data & m) -> bool
+                if (flip_logging_enabled)
                 {
-                    return (m.rip == rip && m.bits == access_bits);
-                });
+                    // Check for known RIPs.
+                    auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &access_bits](const flip_data & m) -> bool
+                    {
+                        return (m.rip == rip && m.bits == access_bits);
+                    });
 
-                if (flip_it != g_flip_log.end())
-                {
-                    // Increase counter and update addresses.
-                    std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
-                    flip_it->counter++;
-                    flip_it->gva = gva;
-                    flip_it->gpa = gpa;
-                    flip_it->d_pa = d_pa;
-                }
-                else
-                {
-                    // Add violation data to the flip log.
-                    std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
-                    g_flip_log.emplace_back(rip, gva, IT(split_it)->gva, gpa, d_pa, cr3, access_bits, 1);
+                    if (flip_it != g_flip_log.end())
+                    {
+                        // Increase counter and update addresses.
+                        std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
+                        flip_it->counter++;
+                        flip_it->gva = gva;
+                        flip_it->gpa = gpa;
+                        flip_it->d_pa = d_pa;
+                    }
+                    else
+                    {
+                        // Add violation data to the flip log.
+                        std::lock_guard<std::mutex> flip_guard(g_flip_mutex);
+                        g_flip_log.emplace_back(rip, gva, IT(split_it)->gva, gpa, d_pa, cr3, access_bits, 1);
+                    }
                 }
 
                 // Log entry
                 /* This seems to cause thrashing
-                bfinfo
-                  << bfcolor_func << "["
-                  << std::bitset<3>(access_bits)
-                  << "]:"  << bfcolor_end
-                  << " cr3: " << hex_out_s(cr3, 8)
-                  << " rip: " << hex_out_s(rip)
-                  << " gva: " << hex_out_s(gva)
-                  //<< " gpa: " << hex_out_s(gpa)
-                  //<< " d_pa: " << hex_out_s(d_pa)
-                  //<< " bits: " << std::bitset<3>(access_bits)
-                  << bfendl;
+                if (debug_disabled) {}
+                else
+                {
+                    bfinfo
+                      << bfcolor_func << "["
+                      << std::bitset<3>(access_bits)
+                      << "]:"  << bfcolor_end
+                      << " cr3: " << hex_out_s(cr3, 8)
+                      << " rip: " << hex_out_s(rip)
+                      << " gva: " << hex_out_s(gva)
+                      //<< " gpa: " << hex_out_s(gpa)
+                      //<< " d_pa: " << hex_out_s(d_pa)
+                      //<< " bits: " << std::bitset<3>(access_bits)
+                      << bfendl;
+                }
                 //*/
 
                 // Compare the previous violation RIP to the current one and
@@ -307,7 +326,7 @@ public:
                 // Check for TLB thrashing
                 if (rip_count > 2)
                 {
-                    bfinfo << bfcolor_warning << "Thrashing detected at " << bfcolor_end << "rip: " << hex_out_s(prev_rip) << bfendl;
+                    bfwarning << "Thrashing detected at rip: " << hex_out_s(prev_rip) << bfendl;
 
                     // Reset prev_rip and rip_count
                     prev_rip = 0;
@@ -316,6 +335,7 @@ public:
                     // Single-step through the clean EPT
                     m_vmcs_eapis->set_eptp(g_clean_ept->eptp());
                     this->register_monitor_trap(&tlb_handler::monitor_trap_callback);
+                    m_vmcs_eapis->resume();
                 }
 
                 // Check exit qualifications
@@ -331,7 +351,7 @@ public:
                     else
                     {
                         // Switch to data page.
-                        //bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                        //_bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
                         flip_data_page(IT(split_it)->d_pa, d_pa);
 
                         /*
@@ -349,7 +369,7 @@ public:
                 {
                     // READ violation. Flip to data page.
                     //
-                    //bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                    //_bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
                     flip_data_page(IT(split_it)->d_pa, d_pa);
 
                     /*
@@ -365,7 +385,7 @@ public:
                 {
                     // EXEC violation. Flip to code page.
                     //
-                    //bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                    //_bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
                     flip_code_page(IT(split_it)->c_pa, d_pa);
 
                     /*
@@ -381,7 +401,7 @@ public:
                     // This shouldn't even be possible...
                     //
 
-                    bfinfo << bfcolor_error << "UNX_Q" << bfcolor_end << ": gva: " << hex_out_s(gva)
+                    bferror << "Unexpected exit qualifications: gva: " << hex_out_s(gva)
                       << " gpa: " << hex_out_s(gpa)
                       << " d_pa: " << hex_out_s(d_pa)
                       << " cr3: " << hex_out_s(cr3, 8)
