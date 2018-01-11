@@ -246,7 +246,7 @@ public:
             // access_bits == (hex) 0x2 -> WRITE    -> (bin) 010
             // access_bits == (hex) 0x4 -> READ     -> (bin) 100
             //
-            const auto &&access_bits = get_bits(vmcs::exit_qualification::ept_violation::get(), 0x0000000000000007UL);
+            const auto &&access_bits = get_bits(vmcs::exit_qualification::ept_violation::get(), 0x7UL);
             //bfdebug << "violation access bits: " << hex_out_s(access_bits, 3) << bfendl;
 
             // Search for relevant entry in <map> m_splits.
