@@ -4,7 +4,7 @@
 #include <memory_manager/map_ptr_x64.h>
 #include <vmcs/root_ept_intel_x64.h>
 #include <vmcs/ept_entry_intel_x64.h>
-//#include <vmcs/ept_entry_ext_intel_x64.h>
+#include <vmcs/ept_entry_ext_intel_x64.h>
 #include <vmcs/vmcs_intel_x64_eapis.h>
 #include <vmcs/vmcs_intel_x64_16bit_control_fields.h>
 #include <vmcs/vmcs_intel_x64_32bit_read_only_data_fields.h>
@@ -177,7 +177,7 @@ public:
         m_vmcs_eapis->set_eptp(g_root_ept->eptp());
 
         // Resume the VM
-        m_vmcs_eapis->resume();
+        this->resume();
     }
 
     /// Flip to data page for read/write access
@@ -186,17 +186,15 @@ public:
     flip_data_page(const int_t &phys_addr, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
-        auto &&entry = /*reinterpret_cast<ept_entry_ext_intel_x64>(*/g_root_ept->gpa_to_epte(d_pa)/*)*/;
-        //auto *m_epte = entry.epte();
-        entry.set_phys_addr(phys_addr);
-
-        // Set RW access
-        //*m_epte = set_bits(*m_epte, 0x7UL, 0x6UL);
+        auto &&entry = reinterpret_cast<ept_entry_ext_intel_x64>(g_root_ept->gpa_to_epte(d_pa));
+        auto *m_epte = entry.epte();
+        entry.set_phys_addr(phys_addr); // Set the physical address
+        *m_epte = set_bits(*m_epte, 0x7UL, 0x6UL); // Set READ-WRITE access
 
         //entry.trap_on_access();
-        entry.set_execute_access(false);
-        entry.set_read_access(true);
-        entry.set_write_access(true);
+        //entry.set_execute_access(false);
+        //entry.set_read_access(true);
+        //entry.set_write_access(true);
     }
 
     /// Flip to code page for execute access
@@ -205,17 +203,15 @@ public:
     flip_code_page(const int_t &phys_addr, const int_t &d_pa)
     {
         std::lock_guard<std::mutex> guard(g_mutex);
-        auto &&entry = /*reinterpret_cast<ept_entry_ext_intel_x64>(*/g_root_ept->gpa_to_epte(d_pa)/*)*/;
-        //auto *m_epte = entry.epte();
-        entry.set_phys_addr(phys_addr);
-
-        // Set EXEC access
-        //*m_epte = set_bits(*m_epte, 0x7UL, 0x1UL);
+        auto &&entry = reinterpret_cast<ept_entry_ext_intel_x64>(g_root_ept->gpa_to_epte(d_pa));
+        auto *m_epte = entry.epte();
+        entry.set_phys_addr(phys_addr); // Set the physical address
+        *m_epte = set_bits(*m_epte, 0x7UL, 0x1UL); // Set EXEC access
 
         //entry.trap_on_access();
-        entry.set_read_access(false);
-        entry.set_write_access(false);
-        entry.set_execute_access(true);
+        //entry.set_read_access(false);
+        //entry.set_write_access(false);
+        //entry.set_execute_access(true);
     }
 
     /// Handle Exit
@@ -335,7 +331,7 @@ public:
                     // Single-step through the clean EPT
                     m_vmcs_eapis->set_eptp(g_clean_ept->eptp());
                     this->register_monitor_trap(&tlb_handler::monitor_trap_callback);
-                    m_vmcs_eapis->resume();
+                    this->resume();
                 }
 
                 // Check exit qualifications
@@ -411,7 +407,7 @@ public:
             }
 
             // Resume the VM
-            m_vmcs_eapis->resume();
+            this->resume();
         }
 
         exit_handler_intel_x64_eapis::handle_exit(reason);
@@ -628,11 +624,7 @@ private:
 
             // We assign the code page here, since that's the most
             // likely one to get used next.
-            std::lock_guard<std::mutex> guard(g_mutex);
-            auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-            entry.set_phys_addr(IT(split_it)->c_pa);
-            entry.trap_on_access();
-            entry.set_execute_access(true);
+            flip_code_page(IT(split_it)->c_pa, d_pa);
 
             // Invalidate/Flush TLB
             vmx::invvpid_all_contexts();

@@ -11,14 +11,14 @@ please see the following documentation.
 
 ## Compilation / Usage
 
-This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), as well as the [Extended APIs](https://github.com/Bareflank/extended_apis) module.
+This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), as well as a modified version of the [Extended APIs](https://github.com/Randshot/extended_apis) module.
 The instructions below are for Windows and should be executed from inside Cygwin64.
 
 ```bash
 cd ~/
 git clone https://github.com/Bareflank/hypervisor.git
 cd hypervisor
-git clone https://github.com/Bareflank/extended_apis.git
+git clone https://github.com/Randshot/extended_apis.git
 git clone https://github.com/Randshot/tlb-split.git src_tlb_split
 
 ./tools/scripts/setup_cygwin.sh --no-configure
