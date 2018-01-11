@@ -188,8 +188,11 @@ public:
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = reinterpret_cast<ept_entry_ext_intel_x64>(g_root_ept->gpa_to_epte(d_pa));
         auto *m_epte = entry.epte();
-        entry.set_phys_addr(phys_addr); // Set the physical address
-        *m_epte = set_bits(*m_epte, 0x7UL, 0x6UL); // Set READ-WRITE access
+        //entry.set_phys_addr(phys_addr); // Set the physical address
+        //*m_epte = set_bits(*m_epte, 0x7UL, 0x6UL); // Set READ-WRITE access
+
+        // Set physical address and EXEC access bit
+        *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x6UL);
 
         //entry.trap_on_access();
         //entry.set_execute_access(false);
@@ -205,8 +208,11 @@ public:
         std::lock_guard<std::mutex> guard(g_mutex);
         auto &&entry = reinterpret_cast<ept_entry_ext_intel_x64>(g_root_ept->gpa_to_epte(d_pa));
         auto *m_epte = entry.epte();
-        entry.set_phys_addr(phys_addr); // Set the physical address
-        *m_epte = set_bits(*m_epte, 0x7UL, 0x1UL); // Set EXEC access
+        //entry.set_phys_addr(phys_addr); // Set the physical address
+        //*m_epte = set_bits(*m_epte, 0x7UL, 0x1UL); // Set EXEC access
+
+        // Set physical address and READ-WRITE access bits
+        *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x1UL);
 
         //entry.trap_on_access();
         //entry.set_read_access(false);
