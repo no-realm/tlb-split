@@ -143,8 +143,8 @@ static std::mutex g_flip_mutex;
 
 // Debug/Logging switches
 constexpr const auto flip_logging_disabled = false;
-constexpr const auto flip_debug_disabled = false;
-constexpr const auto debug_disabled = true;
+constexpr const auto flip_debug_disabled = true;
+constexpr const auto debug_disabled = false;
 #define _bfdebug            \
     if (debug_disabled) {}  \
     else bfdebug
@@ -320,7 +320,7 @@ public:
                 // Check for TLB thrashing
                 if (rip_count > 3)
                 {
-                    _bfdebug << bfwarning << "[" << vcpuid << "] " << "Thrashing detected at rip: " << hex_out_s(prev_rip) << bfendl;
+                    _bfdebug << bfcolor_error << "[" << vcpuid << "] " << bfcolor_end << "Thrashing detected at rip: " << hex_out_s(prev_rip) << bfendl;
 
                     // Reset prev_rip and rip_count
                     prev_rip = 0;
