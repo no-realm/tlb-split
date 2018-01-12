@@ -180,7 +180,7 @@ public:
     void
     monitor_trap_callback()
     {
-        bfwarning << "Resetting the trap" << bfendl;
+        _bfdebug << "Resetting the trap" << bfendl;
 
         // Reset the trap.
         m_vmcs_eapis->set_eptp(g_root_ept->eptp());
@@ -320,7 +320,7 @@ public:
                 // Check for TLB thrashing
                 if (rip_count > 3)
                 {
-                    bfwarning << "[" << vcpuid << "] " << "Thrashing detected at rip: " << hex_out_s(prev_rip) << bfendl;
+                    _bfdebug << bfwarning << "[" << vcpuid << "] " << "Thrashing detected at rip: " << hex_out_s(prev_rip) << bfendl;
 
                     // Reset prev_rip and rip_count
                     prev_rip = 0;
