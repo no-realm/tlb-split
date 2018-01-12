@@ -4,7 +4,6 @@
 #include <memory_manager/map_ptr_x64.h>
 #include <vmcs/root_ept_intel_x64.h>
 #include <vmcs/ept_entry_intel_x64.h>
-#include <vmcs/ept_entry_ext_intel_x64.h>
 #include <vmcs/vmcs_intel_x64_eapis.h>
 #include <vmcs/vmcs_intel_x64_16bit_control_fields.h>
 #include <vmcs/vmcs_intel_x64_32bit_read_only_data_fields.h>
@@ -112,6 +111,15 @@ namespace access_t
     constexpr const auto exec = 2;
 }
 
+enum flip_access_t
+{
+    read,
+    write,
+    readwrite,
+    exec,
+    all
+};
+
 // EPTs
 extern std::unique_ptr<root_ept_intel_x64> g_root_ept;
 extern std::unique_ptr<root_ept_intel_x64> g_clean_ept;
@@ -134,7 +142,8 @@ static std::mutex g_flip_mutex;
 #define IT(_split_it) _split_it->second
 
 // Debug/Logging switches
-constexpr const auto flip_logging_enabled = true;
+constexpr const auto flip_logging_disabled = false;
+constexpr const auto flip_debug_disabled = false;
 constexpr const auto debug_disabled = true;
 #define _bfdebug            \
     if (debug_disabled) {}  \
@@ -180,44 +189,26 @@ public:
         this->resume();
     }
 
-    /// Flip to data page for read/write access
+    /// Flip page (set physical address) and set respective access bits
     ///
     void
-    flip_data_page(const int_t &phys_addr, const int_t &d_pa)
+    flip_page(const int_t &phys_addr, const int_t &d_pa, const flip_access_t flip_access)
     {
-        std::lock_guard<std::mutex> guard(g_mutex);
-        auto &&entry = reinterpret_cast<ept_entry_ext_intel_x64>(g_root_ept->gpa_to_epte(d_pa));
-        auto *m_epte = entry.epte();
-        //entry.set_phys_addr(phys_addr); // Set the physical address
-        //*m_epte = set_bits(*m_epte, 0x7UL, 0x6UL); // Set READ-WRITE access
+        //std::lock_guard<std::mutex> guard(g_mutex);
+        auto *m_epte = g_root_ept->gpa_to_epte(d_pa).epte();
 
-        // Set physical address and EXEC access bit
-        *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x6UL);
-
-        //entry.trap_on_access();
-        //entry.set_execute_access(false);
-        //entry.set_read_access(true);
-        //entry.set_write_access(true);
-    }
-
-    /// Flip to code page for execute access
-    ///
-    void
-    flip_code_page(const int_t &phys_addr, const int_t &d_pa)
-    {
-        std::lock_guard<std::mutex> guard(g_mutex);
-        auto &&entry = reinterpret_cast<ept_entry_ext_intel_x64>(g_root_ept->gpa_to_epte(d_pa));
-        auto *m_epte = entry.epte();
-        //entry.set_phys_addr(phys_addr); // Set the physical address
-        //*m_epte = set_bits(*m_epte, 0x7UL, 0x1UL); // Set EXEC access
-
-        // Set physical address and READ-WRITE access bits
-        *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x1UL);
-
-        //entry.trap_on_access();
-        //entry.set_read_access(false);
-        //entry.set_write_access(false);
-        //entry.set_execute_access(true);
+        switch (flip_access) {
+            case flip_access_t::read:
+            { *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x1UL); break; }
+            case flip_access_t::write:
+            { *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x2UL); break; }
+            case flip_access_t::readwrite:
+            { *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x3UL); break; }
+            case flip_access_t::exec:
+            { *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x4UL); break; }
+            case flip_access_t::all:
+            { *m_epte = set_bits(*m_epte, 0xFFFFFFFFF007UL, phys_addr | 0x7UL); break; }
+        }
     }
 
     /// Handle Exit
@@ -239,7 +230,7 @@ public:
             const auto &&gpa = vmcs::guest_physical_address::get();
             const auto &&d_pa = gpa & mask;
             auto &&rip = m_state_save->rip;
-            //auto &&vcpuid = m_state_save->vcpuid;
+            auto &&vcpuid = m_state_save->vcpuid;
 
             // Get the violation access bits directly from the bit structure
             // access_bits == (hex) 0x1 -> EXECUTE  -> (bin) 001
@@ -264,13 +255,13 @@ public:
                   << " bits: " << std::bitset<3>(access_bits)
                   << bfendl;
 
-                std::lock_guard<std::mutex> guard(g_mutex);
-                auto &&entry = g_root_ept->gpa_to_epte(gpa);
-                entry.pass_through_access();
+                auto &&entry = g_root_ept->gpa_to_epte(d_pa);
+                flip_page(entry.phys_addr(), d_pa, flip_access_t::all);
             }
             else
             {
-                if (flip_logging_enabled)
+                if (flip_logging_disabled) {}
+                else
                 {
                     // Check for known RIPs.
                     auto &&flip_it = std::find_if(g_flip_log.begin(), g_flip_log.end(), [&rip, &access_bits](const flip_data & m) -> bool
@@ -296,8 +287,8 @@ public:
                 }
 
                 // Log entry
-                /* This seems to cause thrashing
-                if (debug_disabled) {}
+                ///* This seems to cause thrashing
+                if (flip_debug_disabled) {}
                 else
                 {
                     bfinfo
@@ -310,6 +301,7 @@ public:
                       //<< " gpa: " << hex_out_s(gpa)
                       //<< " d_pa: " << hex_out_s(d_pa)
                       //<< " bits: " << std::bitset<3>(access_bits)
+                      << " vcpuid: " << vcpuid
                       << bfendl;
                 }
                 //*/
@@ -326,9 +318,9 @@ public:
                 }
 
                 // Check for TLB thrashing
-                if (rip_count > 2)
+                if (rip_count > 3)
                 {
-                    bfwarning << "Thrashing detected at rip: " << hex_out_s(prev_rip) << bfendl;
+                    bfwarning << "[" << vcpuid << "] " << "Thrashing detected at rip: " << hex_out_s(prev_rip) << bfendl;
 
                     // Reset prev_rip and rip_count
                     prev_rip = 0;
@@ -337,7 +329,7 @@ public:
                     // Single-step through the clean EPT
                     m_vmcs_eapis->set_eptp(g_clean_ept->eptp());
                     this->register_monitor_trap(&tlb_handler::monitor_trap_callback);
-                    this->resume();
+                    //this->resume();
                 }
 
                 // Check exit qualifications
@@ -347,56 +339,29 @@ public:
                     {
                         // WRITE violation. Deactivate split and flip to data page.
                         //
-                        bfwarning << "handle_exit: deactivating page because of write violation from different cr3: " << hex_out_s(cr3, 8) << bfendl;
+                        bfwarning << "[" << vcpuid << "] " << "handle_exit: deactivating page because of write violation from different cr3: " << hex_out_s(cr3, 8) << bfendl;
                         deactivate_split(gva);
                     }
                     else
                     {
                         // Switch to data page.
-                        //_bfdebug << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
-                        flip_data_page(IT(split_it)->d_pa, d_pa);
-
-                        /*
-                        std::lock_guard<std::mutex> guard(g_mutex);
-                        auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-                        entry.trap_on_access();
-                        entry.set_phys_addr(IT(split_it)->d_pa);
-                        entry.set_read_access(true);
-                        entry.set_write_access(true);
-                        */
-
+                        //_bfdebug << "[" << vcpuid << "] " << "handle_exit: switch to data for write: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                        flip_page(IT(split_it)->d_pa, d_pa, flip_access_t::readwrite);
                     }
                 }
                 else if (is_bit_set(access_bits, access_t::read))
                 {
                     // READ violation. Flip to data page.
                     //
-                    //_bfdebug << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
-                    flip_data_page(IT(split_it)->d_pa, d_pa);
-
-                    /*
-                    std::lock_guard<std::mutex> guard(g_mutex);
-                    auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-                    entry.trap_on_access();
-                    entry.set_phys_addr(IT(split_it)->d_pa);
-                    entry.set_read_access(true);
-                    entry.set_write_access(true);
-                    //*/
+                    //_bfdebug << "[" << vcpuid << "] " << "handle_exit: switch to data for read: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                    flip_page(IT(split_it)->d_pa, d_pa, flip_access_t::readwrite);
                 }
                 else if(is_bit_set(access_bits, access_t::exec))
                 {
                     // EXEC violation. Flip to code page.
                     //
-                    //_bfdebug << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
-                    flip_code_page(IT(split_it)->c_pa, d_pa);
-
-                    /*
-                    std::lock_guard<std::mutex> guard(g_mutex);
-                    auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-                    entry.trap_on_access();
-                    entry.set_phys_addr(IT(split_it)->c_pa);
-                    entry.set_execute_access(true);
-                    //*/
+                    //_bfdebug << "[" << vcpuid << "] " << "handle_exit: switch to code for exec: " << hex_out_s(cr3, 8) << '/' << hex_out_s(rip) << '/' << hex_out_s(gva) << bfendl;
+                    flip_page(IT(split_it)->c_pa, d_pa, flip_access_t::exec);
                 }
                 else
                 {
@@ -630,7 +595,7 @@ private:
 
             // We assign the code page here, since that's the most
             // likely one to get used next.
-            flip_code_page(IT(split_it)->c_pa, d_pa);
+            flip_page(IT(split_it)->c_pa, d_pa, flip_access_t::exec);
 
             // Invalidate/Flush TLB
             vmx::invvpid_all_contexts();
@@ -683,11 +648,8 @@ private:
 
             // Mutex block
             {
-                // Flip to data page and restore to default flags
-                std::lock_guard<std::mutex> guard(g_mutex);
-                auto &&entry = g_root_ept->gpa_to_epte(d_pa);
-                entry.set_phys_addr(IT(split_it)->d_pa);
-                entry.pass_through_access();
+                // Flip to data page and restore to default (pass-through) flags
+                flip_page(IT(split_it)->d_pa, d_pa, flip_access_t::all);
 
                 // Erase split context from <map> m_splits.
                 g_splits.erase(d_pa);
