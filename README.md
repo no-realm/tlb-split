@@ -59,3 +59,20 @@ For more information about the monitor application use the `--help` option.
 ```bash
 makefiles/src_tlb_split/app/bin/native/hook.exe --help
 ```
+
+## Aliases
+
+These are the aliases that I have defined in my `.bashrc` (`/home/<username>/.bashrc`) file.
+
+```bash
+# Bareflank aliases
+alias bfdir='cd /cygdrive/a/repos/bareflank/build'
+alias bfmake='make'
+alias bfstart='make quick'
+alias bfstop='make stop'
+alias bfload='make driver_load'
+alias bfunload='make driver_unload'
+alias bfrestart='bfstop && bfstart'
+alias bfrecompile='bfstop && bfunload && bfmake && bfload && bfstart'
+alias bfmonitor='makefiles/src_tlb_split/app/bin/native/hook.exe'
+```
