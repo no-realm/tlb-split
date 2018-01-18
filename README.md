@@ -3,7 +3,8 @@
 ## Description
 
 This module adds TLB splitting to the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor) by providing
-an IOCTL and VMCALL interface. This module also makes use of the [Extended APIs](https://github.com/Bareflank/extended_apis) module.
+an IOCTL and VMCALL interface.<br/>
+This module also makes use of the [Extended APIs](https://github.com/Bareflank/extended_apis) module.<br/>
 For further information about the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor) and how to create extensions,
 please see the following documentation.
 
@@ -11,8 +12,8 @@ please see the following documentation.
 
 ## Compilation / Usage
 
-This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), as well as a modified version of the [Extended APIs](https://github.com/Randshot/extended_apis) module.
-The instructions below are for Windows and should be executed from inside Cygwin64.
+This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), as well as a modified version of the [Extended APIs](https://github.com/Randshot/extended_apis) module.<br/>
+The instructions below are for Windows and should be executed from inside Cygwin64.<br/>
 *Replace `<bareflank path>` with your Bareflank path!*
 
 ```bash
@@ -63,7 +64,7 @@ makefiles/src_tlb_split/app/bin/native/hook.exe --help
 
 ## Aliases
 
-These are the aliases that I have defined in my `.bashrc` (`/home/<username>/.bashrc`) file.
+These are the aliases that I have defined in my `.bashrc` (`/home/<username>/.bashrc`) file.<br/>
 *Replace `<bareflank path>` with your Bareflank path!*
 
 ```bash
