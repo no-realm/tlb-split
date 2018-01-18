@@ -13,6 +13,7 @@ please see the following documentation.
 
 This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor), as well as a modified version of the [Extended APIs](https://github.com/Randshot/extended_apis) module.
 The instructions below are for Windows and should be executed from inside Cygwin64.
+*Replace `<bareflank path>` with your Bareflank path!*
 
 ```bash
 # Change directory to the bareflank dir
@@ -63,6 +64,7 @@ makefiles/src_tlb_split/app/bin/native/hook.exe --help
 ## Aliases
 
 These are the aliases that I have defined in my `.bashrc` (`/home/<username>/.bashrc`) file.
+*Replace `<bareflank path>` with your Bareflank path!*
 
 ```bash
 # Bareflank aliases
