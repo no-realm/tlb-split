@@ -66,7 +66,7 @@ These are the aliases that I have defined in my `.bashrc` (`/home/<username>/.ba
 
 ```bash
 # Bareflank aliases
-alias bfdir='cd /cygdrive/a/repos/bareflank/build'
+alias bfdir='cd /<build path>/build'
 alias bfmake='make'
 alias bfstart='make quick'
 alias bfstop='make stop'
