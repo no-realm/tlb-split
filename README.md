@@ -15,21 +15,29 @@ This example uses both the [Bareflank Hypervisor](https://github.com/Bareflank/h
 The instructions below are for Windows and should be executed from inside Cygwin64.
 
 ```bash
-cd ~/
-git clone https://github.com/Bareflank/hypervisor.git
-cd hypervisor
+# Change directory to the bareflank dir
+cd /cygdrive/a/repos/bareflank/
+
+# Clone the Bareflank hypervisor repo and cd into it
+git clone https://github.com/Bareflank/hypervisor.git && cd hypervisor
+
+# Clone both the extended_apis and the tlb-split repo
 git clone https://github.com/Randshot/extended_apis.git
 git clone https://github.com/Randshot/tlb-split.git src_tlb_split
 
+# Setup Cygwin, but don't configure Bareflank yet
 ./tools/scripts/setup_cygwin.sh --no-configure
 
-./configure -m ./extended_apis/bin/extended_apis.modules
+# Not needed, I think...
+#./configure -m ./extended_apis/bin/extended_apis.modules
 
-cd ..
-mkdir build
-cd build
+# Create the build directory and cd into it
+cd .. && mkdir build && cd build
 
+# Configure the Bareflank hypervisor and define the tlp-split repo as module
 ../hypervisor/configure -m ../hypervisor/src_tlb_split/bin/tlb_split.modules --compiler clang --linker $HOME/usr/bin/x86_64-elf-ld.exe
+
+# Execute make
 make
 ```
 
