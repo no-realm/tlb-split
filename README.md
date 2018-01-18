@@ -84,8 +84,8 @@ alias bfmonitor='makefiles/src_tlb_split/app/bin/native/hook.exe'
 
 **Missing extensions.mk**
 ```bash
-Makefile:108: <bareflank path>/extensions.mk: No such file or directory
-make[1]: *** No rule to make target '<bareflank path>/extensions.mk'.  Stop.
+Makefile:108: <bareflank path>/hypervisor/extensions.mk: No such file or directory
+make[1]: *** No rule to make target '<bareflank path>/hypervisor/extensions.mk'.  Stop.
 make: *** [Makefile:6: all] Error 2
 ```
 If you get the above error after starting `configure`, just copy the `extensions.mk` file from the `build` directory into the `hypervisor` and then try it again.
