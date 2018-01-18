@@ -16,7 +16,7 @@ The instructions below are for Windows and should be executed from inside Cygwin
 
 ```bash
 # Change directory to the bareflank dir
-cd /cygdrive/a/repos/bareflank/
+cd <bareflank path>
 
 # Clone the Bareflank hypervisor repo and cd into it
 git clone https://github.com/Bareflank/hypervisor.git && cd hypervisor
@@ -66,7 +66,7 @@ These are the aliases that I have defined in my `.bashrc` (`/home/<username>/.ba
 
 ```bash
 # Bareflank aliases
-alias bfdir='cd /<build path>/build'
+alias bfdir='cd <bareflank path>/build'
 alias bfmake='make'
 alias bfstart='make quick'
 alias bfstop='make stop'
