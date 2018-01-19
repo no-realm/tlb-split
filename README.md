@@ -30,6 +30,9 @@ git clone https://github.com/Randshot/tlb-split.git src_tlb_split
 # Setup Cygwin, but don't configure Bareflank yet
 ./tools/scripts/setup_cygwin.sh --no-configure
 
+# Create the extensions.mk file
+touch extensions.mk
+
 # Not needed, I think...
 #./configure -m ./extended_apis/bin/extended_apis.modules
 
