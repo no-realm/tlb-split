@@ -1,5 +1,7 @@
 # TLB splitting module for the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor)
 
+**OUTDATED**: New version can be found here: [ept_split](https://github.com/Randshot/ept_split)
+
 ## Description
 
 This module adds TLB splitting to the [Bareflank Hypervisor](https://github.com/Bareflank/hypervisor) by providing
